@@ -1,9 +1,10 @@
 /**
  * Client for the IBP label print server.
  *
- * The print server (https://github.com/jonkensta/print-server) runs on the
- * machine physically attached to the USB label printer and listens on HTTP
- * (default port 40121). Posting a label PNG to its /print-image endpoint
+ * The print server (ibp-print-server, part of
+ * https://github.com/jonkensta/ibp-printing; see docs/print-server.md) runs
+ * on the machine physically attached to the USB label printer and listens on
+ * HTTP (default port 40121). Posting a label PNG to its /print-image endpoint
  * prints it silently, with no browser print dialog.
  *
  * Note on mixed content: browsers allow an HTTPS page to fetch

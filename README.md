@@ -33,7 +33,7 @@ Optional build-time environment variables (copy `.env.example` to `.env.local`):
 | Variable | Default | Purpose |
 |---|---|---|
 | `VITE_API_BASE_URL` | `/api` | Backend base URL; leave unset to go through the proxy (set it only for a backend at another origin with `[server] cors_origins`) |
-| `VITE_PRINT_SERVER_URL` | `http://localhost:40121` | Intake station's [ibp-print-server](https://github.com/jonkensta/ibp-print-server) |
+| `VITE_PRINT_SERVER_URL` | `http://localhost:40121` | Intake station's [ibp-print-server](https://github.com/jonkensta/ibp-printing/blob/main/docs/print-server.md) (part of ibp-printing) |
 
 ## Checks
 
