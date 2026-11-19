@@ -37,6 +37,7 @@ function makeItem(overrides: Partial<PackageItem> = {}): PackageItem {
     source: 'isbn',
     revision: 0,
     registered_at: null,
+    confirmation_number: null,
     created_at: '2026-11-05T10:00:00Z',
     updated_at: '2026-11-05T10:00:00Z',
     ...overrides,
@@ -152,6 +153,19 @@ describe('PackagePage', () => {
         .not.toBeInTheDocument();
       await expect
         .element(page.getByRole('button', { name: 'Delete The Odyssey' }))
+        .toBeInTheDocument();
+    });
+
+    it("shows the portal's confirmation number on a registered book", async () => {
+      vi.mocked(getPackage).mockResolvedValue(
+        makePackage({
+          items: [makeItem({ registered_at: '2026-11-05T20:00:00Z', confirmation_number: '4521' })],
+        })
+      );
+      await renderPage();
+
+      await expect
+        .element(page.getByText('Registered (#4521)', { exact: true }))
         .toBeInTheDocument();
     });
 

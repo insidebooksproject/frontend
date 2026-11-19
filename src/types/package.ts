@@ -17,6 +17,8 @@ export interface PackageItem {
   revision: number;
   /** Set once the book is registered on the TDCJ Book Portal (read-only then). */
   registered_at: string | null;
+  /** The portal's confirmation number, when the extension reported it. */
+  confirmation_number: string | null;
   created_at: string;
   updated_at: string;
 }

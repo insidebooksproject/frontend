@@ -32,6 +32,7 @@ function makeItem(overrides: Partial<PackageItem> = {}): PackageItem {
     source: 'isbn',
     revision: 0,
     registered_at: null,
+    confirmation_number: null,
     created_at: '2026-11-05T10:00:00Z',
     updated_at: '2026-11-05T10:00:00Z',
     ...overrides,
