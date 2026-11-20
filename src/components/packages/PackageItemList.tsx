@@ -3,11 +3,14 @@ import { Button } from '@/components/ui/button';
 import { Panel, PanelBody, PanelHeading, PanelTitle } from '@/components/ui/panel';
 import type { Jurisdiction, PackageItem } from '@/types';
 
-/** "Registered" or "Not registered yet", the words volunteers see. */
+/**
+ * "Registered" or "Not registered yet", the words volunteers see, with the
+ * portal's confirmation number when there is one.
+ */
 export function RegistrationBadge({ item }: { item: PackageItem }) {
   return item.registered_at ? (
     <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-green-800 dark:bg-green-900/40 dark:text-green-200">
-      Registered
+      Registered{item.confirmation_number && ` (#${item.confirmation_number})`}
     </span>
   ) : (
     <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
