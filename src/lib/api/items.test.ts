@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { addPackageItem, deletePackageItem, getPackageItems, updatePackageItem } from './items';
 import { getPackage } from './packages';
-import { getBook, getBookByUpc } from './books';
+import { getBook, getBookByUpc, getBookSuggestion } from './books';
 import { ApiError } from './client';
 
 const mockFetch = vi.fn();
@@ -134,6 +134,43 @@ describe('Package, item and book API', () => {
       expect(error).toBeInstanceOf(ApiError);
       expect(error.status).toBe(422);
       expect(error.body).toEqual({ detail: 'Not a valid UPC.' });
+    });
+  });
+
+  describe('getBookSuggestion', () => {
+    const suggestion = {
+      title: 'Moby-Dick',
+      author: 'Herman Melville',
+      confidence: 'high',
+      notes: 'Misspelled title.',
+    };
+
+    it('asks with the title and author encoded, and returns the suggestion', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ suggestion }));
+      expect(await getBookSuggestion('Moby Dik & co', 'Herman Melvile')).toEqual(suggestion);
+      expect(mockFetch.mock.calls[0][0]).toMatch(
+        /\/book-suggestions\?title=Moby\+Dik\+%26\+co&author=Herman\+Melvile$/
+      );
+      expect(mockFetch.mock.calls[0][1].method).toBe('GET');
+    });
+
+    it('returns null when there is none', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ suggestion: null }));
+      expect(await getBookSuggestion('Moby-Dick', 'Herman Melville')).toBeNull();
+    });
+
+    it('reads a 404 (an older backend) and a 422 as no suggestion', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ detail: 'Not Found' }, 404));
+      expect(await getBookSuggestion('Moby Dik', 'Herman Melvile')).toBeNull();
+      mockFetch.mockResolvedValueOnce(jsonResponse({ detail: [] }, 422));
+      expect(await getBookSuggestion('Mo', 'Herman Melvile')).toBeNull();
+    });
+
+    it('throws for a server error', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ detail: 'Oops' }, 500));
+      const error = await getBookSuggestion('Moby Dik', 'Herman Melvile').catch((e) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.status).toBe(500);
     });
   });
 });

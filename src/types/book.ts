@@ -22,3 +22,15 @@ export type UpcLookup =
   | { status: 'no_isbn' }
   /** The code maps to `isbn`, but no title is known for it. */
   | { status: 'no_book'; isbn: string };
+
+/**
+ * A better spelling of a typed title and author (`GET /book-suggestions`).
+ * The server offers one only when it is sure, and never with an ISBN.
+ */
+export interface BookSuggestion {
+  title: string;
+  author: string;
+  confidence: 'high';
+  /** Why the server thinks it's the same book (for logs, not shown). */
+  notes: string;
+}
