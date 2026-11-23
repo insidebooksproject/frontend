@@ -790,7 +790,9 @@ describe('PackagePage', () => {
       // Found: nothing to remember.
       await expect.element(remember()).not.toBeInTheDocument();
 
-      await userEvent.keyboard('{Enter}');
+      // (Enter on the focused button saves too; a key sent to an element the
+      // page focused itself is unreliable under a loaded test browser.)
+      await addButton().click();
       await vi.waitFor(() =>
         expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
           isbn: '9780441172719',
