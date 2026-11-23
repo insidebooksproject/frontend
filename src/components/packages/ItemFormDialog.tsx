@@ -32,10 +32,12 @@ const BARE_UPC =
   "This UPC is shared by many books, so it can't identify this one. Look for an ISBN inside the front cover, or leave this empty.";
 
 // A barcode scanner types its digits a few ms apart and ends with Enter
-// (the Book Portal extension tells scans from typing the same way). The
-// shortest code it sends is 10 digits (an ISBN-10).
+// (the Book Portal extension tells scans from typing the same way). Nobody
+// types SCAN_MIN_KEYS keys that fast. What it sends is an EAN-13 (an ISBN,
+// maybe with its price add-on) or a UPC: 12 digits or more, never an ISBN-10.
 const SCAN_GAP_MS = 50;
-const SCAN_MIN_LENGTH = 10;
+const SCAN_MIN_KEYS = 6;
+const SCAN_MIN_DIGITS = 12;
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock']);
 
 const itemSchema = z.object({
@@ -169,6 +171,22 @@ function itemSource(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The code a scanner just typed into a field holding `value`, given the
+ * `burst` of fast keys before its Enter: the digits ending the field (a busy
+ * browser can split one scan into two bursts), else the burst alone (a scan
+ * typed after an earlier one, or in the middle of the text). Null if neither
+ * is a code a scanner sends.
+ */
+function scannedCode(value: string, burst: string): string | null {
+  const trailing = /\d+$/.exec(value.trimEnd())?.[0] ?? '';
+  for (const candidate of [trailing, burst]) {
+    const digitsOnly = /^\d+$/.test(candidate) && candidate.length >= SCAN_MIN_DIGITS;
+    if (digitsOnly && classifyBarcode(candidate, { scanned: true })) return candidate;
+  }
+  return null;
 }
 
 /** `value` without the scanned digits typed into it (normally at its end). */
@@ -391,26 +409,32 @@ function ItemForm({
     strokes.current = [];
     const last = keys.at(-1);
     const burst =
-      keys.length >= SCAN_MIN_LENGTH && last && now - last.time <= SCAN_GAP_MS
+      keys.length >= SCAN_MIN_KEYS && last && now - last.time <= SCAN_GAP_MS
         ? keys.map((stroke) => stroke.key).join('')
         : null;
-    const scan = burst && /^\d+$/.test(burst) ? classifyBarcode(burst, { scanned: true }) : null;
     const target = e.target as HTMLElement;
+    const field =
+      target.id === 'item-barcode'
+        ? 'barcode'
+        : target.id === 'item-title'
+          ? 'title'
+          : target.id === 'item-author'
+            ? 'author'
+            : null;
+    const value = field ? getValues(field) : '';
+    const scan = burst ? scannedCode(value, burst) : null;
 
-    if (target.id === 'item-barcode') {
+    if (field === 'barcode') {
       e.preventDefault();
-      if (burst && scan) takeBarcode(burst, true, true);
-      else takeBarcode(getValues('barcode'), false, true);
+      if (scan) takeBarcode(scan, true, true);
+      else takeBarcode(value, false, true);
       return;
     }
-    if (!burst || !scan) return;
+    if (!scan) return;
     e.preventDefault();
     e.stopPropagation();
-    if (target.id === 'item-title' || target.id === 'item-author') {
-      const field = target.id === 'item-title' ? 'title' : 'author';
-      setValue(field, withoutScan(getValues(field), burst));
-    }
-    takeBarcode(burst, true, false);
+    if (field) setValue(field, withoutScan(value, scan));
+    takeBarcode(scan, true, false);
   };
 
   const submit = async (values: ItemFormValues) => {

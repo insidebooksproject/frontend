@@ -912,6 +912,23 @@ describe('PackagePage', () => {
       expect(addPackageItem).not.toHaveBeenCalled();
     });
 
+    it('takes the whole code when a busy browser splits a scan in two', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await titleField().fill('Dune ');
+      await titleField().click();
+      await userEvent.keyboard('9780');
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await scannerTypes('441172719');
+
+      await expect.element(barcodeInput()).toHaveValue('9780441172719');
+      await expect.element(titleField()).toHaveValue('Dune ');
+      expect(getBook).toHaveBeenCalledWith('9780441172719');
+      expect(addPackageItem).not.toHaveBeenCalled();
+    });
+
     it('keeps what was typed in Title when a scan lands after it', async () => {
       vi.mocked(getBook).mockResolvedValue(book);
       await renderPage();
