@@ -85,12 +85,14 @@ async function searchInmatesOrLegacyRequest(query: string): Promise<InmateSearch
 
 /**
  * The inmate a search should take the volunteer straight to: the only
- * result, unless the search marked it as not safe to redirect to.
+ * result, unless the search marked it as not safe to redirect to or set
+ * older records aside (the volunteer may be after one of those).
  */
 export function autoRedirectTarget(
   results: InmateSearchResults | undefined
 ): InmateSearchResult | null {
   if (!results || results.noAutoRedirect || results.inmates.length !== 1) return null;
+  if (results.stale_inmates?.length) return null;
   return results.inmates[0];
 }
 

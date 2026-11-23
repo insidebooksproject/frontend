@@ -434,5 +434,12 @@ describe('useInmates', () => {
         autoRedirectTarget({ inmates: [inmate], errors: ['x'], noAutoRedirect: true })
       ).toBeNull();
     });
+
+    it('is null when older records were set aside', () => {
+      expect(
+        autoRedirectTarget({ inmates: [inmate], stale_inmates: [inmate], errors: [] })
+      ).toBeNull();
+      expect(autoRedirectTarget({ inmates: [inmate], stale_inmates: [], errors: [] })).toBe(inmate);
+    });
   });
 });
