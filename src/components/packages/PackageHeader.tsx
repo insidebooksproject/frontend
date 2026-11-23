@@ -18,7 +18,14 @@ export function PackageHeader({ pkg }: { pkg: Package }) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">{name}</h1>
+          <h1 className="text-3xl font-bold">
+            {name}
+            {inmate.pronouns && (
+              <span className="ml-2 text-xl font-normal text-muted-foreground">
+                ({inmate.pronouns})
+              </span>
+            )}
+          </h1>
           <p className="mt-1 text-lg text-muted-foreground">
             <span>
               {inmate.jurisdiction} #{inmate.id.toString().padStart(8, '0')}

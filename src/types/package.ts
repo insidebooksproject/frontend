@@ -53,6 +53,8 @@ export interface PackageRequest extends Request {
 
 export interface PackageInmate extends InmateBase {
   unit: Unit | null;
+  /** Pronouns the person stated in a letter, if any (shown, never printed). */
+  pronouns?: string | null;
 }
 
 /** A filled request with its inmate, books and the inmate's warnings. */
