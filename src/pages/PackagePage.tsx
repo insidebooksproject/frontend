@@ -19,6 +19,7 @@ import {
 import {
   useAddPackageItem,
   useDeletePackageItem,
+  useFetchBookSuggestion,
   useLookupBook,
   useLookupUpc,
   usePackage,
@@ -31,6 +32,7 @@ import { looksLikePackageCode } from '@/lib/packageScan';
 import { cleanPortalText, isPortalLength } from '@/lib/portalText';
 import type {
   Book,
+  BookSuggestion,
   Package,
   PackageItem,
   PackageItemCreate,
@@ -157,6 +159,18 @@ interface FailedAdd {
 }
 
 /**
+ * A better spelling of a saved item's title and author, found after the
+ * form closed. Offered on its row while the item is as it was saved.
+ */
+interface SpellingNotice {
+  /** The item's revision when saved: accepting edits that revision. */
+  revision: number;
+  suggestion: BookSuggestion;
+  /** Accepting it is being saved. */
+  saving: boolean;
+}
+
+/**
  * Scanned books not yet resolved: queued, being looked up or added, held for
  * the form, or in the open form (typing in, or saving).
  */
@@ -215,6 +229,7 @@ function PackageWorkspace({
   const addItem = useAddPackageItem(code);
   const updateItem = useUpdatePackageItem(code);
   const deleteItem = useDeletePackageItem(code);
+  const fetchSuggestion = useFetchBookSuggestion();
 
   const isbnInputRef = useRef<HTMLInputElement>(null);
   const [isbnValue, setIsbnValue] = useState('');
@@ -232,6 +247,9 @@ function PackageWorkspace({
   const [scans, setScans] = useState<ScanState>(IDLE);
   const [labelHint, setLabelHint] = useState(false);
   const [failedAdds, setFailedAdds] = useState<FailedAdd[]>([]);
+  // Spelling suggestions that came after their item was saved, by item id.
+  // Only on this page: they go when the packer leaves it.
+  const [spellingNotices, setSpellingNotices] = useState<Record<number, SpellingNotice>>({});
   // Mirrors `failedAdds` synchronously, for checks made between renders.
   const failedRef = useRef<FailedAdd[]>([]);
   const nextFailedId = useRef(0);
@@ -420,6 +438,72 @@ function PackageWorkspace({
       return rest;
     });
     setAlertIds((current) => current.filter((id) => id !== itemId));
+  };
+
+  const forgetSpelling = (itemId: number) => {
+    setSpellingNotices((current) => {
+      if (!(itemId in current)) return current;
+      const rest = { ...current };
+      delete rest[itemId];
+      return rest;
+    });
+  };
+
+  /**
+   * Look a saved item's title and author up for a better spelling in the
+   * background (a lookup the form started is waited for); one found goes on
+   * the item's row. A failed lookup is no suggestion.
+   */
+  const checkSpellingLater = async (item: PackageItem, title: string, author: string) => {
+    let suggestion: BookSuggestion | null;
+    try {
+      suggestion = await fetchSuggestion(title, author);
+    } catch {
+      return;
+    }
+    if (!suggestion || !alive.current) return;
+    setSpellingNotices((current) =>
+      // An earlier save's answer coming late never replaces a later one's.
+      (current[item.id]?.revision ?? -1) > item.revision
+        ? current
+        : { ...current, [item.id]: { revision: item.revision, suggestion, saving: false } }
+    );
+  };
+
+  /** Use this: the normal edit, of the revision saved, leaving the ISBN and cache alone. */
+  const acceptSpelling = async (item: PackageItem) => {
+    focusIsbnInput();
+    const notice = spellingNotices[item.id];
+    if (!notice || notice.saving) return;
+    setSpellingNotices((current) => ({ ...current, [item.id]: { ...notice, saving: true } }));
+    const { title, author } = notice.suggestion;
+    try {
+      await updateItem.mutateAsync({
+        itemId: item.id,
+        data: { isbn: item.isbn, title, author, revision: notice.revision, update_cache: false },
+      });
+      toast.success(`Saved “${title}”`);
+      if (alive.current) forgetSpelling(item.id);
+    } catch (error) {
+      if (!alive.current) return;
+      // Changed since it was saved (edited, registered): the offer is moot,
+      // and the list is being reloaded.
+      if (isConflict(error)) {
+        forgetSpelling(item.id);
+        return;
+      }
+      toast.error(`Couldn't save “${title}”: ${errorMessage(error)}`);
+      setSpellingNotices((current) =>
+        current[item.id]
+          ? { ...current, [item.id]: { ...current[item.id], saving: false } }
+          : current
+      );
+    }
+  };
+
+  const keepSpelling = (item: PackageItem) => {
+    forgetSpelling(item.id);
+    focusIsbnInput();
   };
 
   const addFromLookup = async (book: Book) => {
@@ -612,6 +696,7 @@ function PackageWorkspace({
       try {
         const created = await addItem.mutateAsync(data);
         recordAdded(created);
+        if (values.checkSpelling) void checkSpellingLater(created, values.title, values.author);
         closeForm(open.id);
       } catch (error) {
         if (!isConflict(error)) throw error;
@@ -622,7 +707,7 @@ function PackageWorkspace({
     }
 
     try {
-      await updateItem.mutateAsync({
+      const saved = await updateItem.mutateAsync({
         itemId: open.item.id,
         data: {
           isbn,
@@ -633,9 +718,12 @@ function PackageWorkspace({
         },
       });
       toast.success(`Saved “${values.title}”`);
+      forgetSpelling(open.item.id);
+      if (values.checkSpelling) void checkSpellingLater(saved, values.title, values.author);
       closeForm(open.id);
     } catch (error) {
       if (!isConflict(error)) throw error;
+      forgetSpelling(open.item.id);
       // Edited elsewhere or registered meanwhile; the list is being reloaded.
       toast.error(`${error.message} The list has been reloaded.`);
       closeForm(open.id);
@@ -646,7 +734,10 @@ function PackageWorkspace({
     try {
       await deleteItem.mutateAsync({ itemId: item.id, confirmRegistered: !!item.registered_at });
       toast.success(`Removed “${item.title}”`);
-      if (alive.current) forgetSentBefore(item.id);
+      if (alive.current) {
+        forgetSentBefore(item.id);
+        forgetSpelling(item.id);
+      }
     } catch (error) {
       if (isConflict(error)) {
         toast.error(`${error.message} The list has been reloaded.`);
@@ -667,6 +758,14 @@ function PackageWorkspace({
     if (warning && warning.isbn === item.isbn) sentBeforeNow[item.id] = warning.codes;
   }
   const flagged = pkg.items.filter((item) => alertIds.includes(item.id) && sentBeforeNow[item.id]);
+  // Spelling offers for books still as they were saved, never for a registered one.
+  const spellingNow: Record<number, BookSuggestion & { saving: boolean }> = {};
+  for (const item of pkg.items) {
+    const notice = spellingNotices[item.id];
+    if (notice && notice.revision === item.revision && !item.registered_at) {
+      spellingNow[item.id] = { ...notice.suggestion, saving: notice.saving };
+    }
+  }
 
   const formProps: Omit<ItemFormDialogProps, 'open' | 'onOpenChange' | 'onSubmit'> | null =
     form === null
@@ -679,9 +778,12 @@ function PackageWorkspace({
             note: form.note,
             initialErrors: form.initialErrors,
             validateOnOpen: form.validateOnOpen,
+            suggestSpelling: true,
           }
         : {
             mode: 'edit',
+            suggestSpelling: !form.item.registered_at,
+            defaultsLookedUp: form.item.source === 'isbn',
             defaultValues: {
               barcode: form.item.isbn ?? '',
               title: form.item.title,
@@ -833,6 +935,9 @@ function PackageWorkspace({
         onEdit={(item) => openForm({ mode: 'edit', item })}
         onDelete={openDelete}
         sentBefore={sentBeforeNow}
+        spelling={spellingNow}
+        onUseSpelling={(item) => void acceptSpelling(item)}
+        onKeepSpelling={keepSpelling}
       />
 
       <div className="flex items-center justify-end gap-3">

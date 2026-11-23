@@ -1,7 +1,7 @@
 import { Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Panel, PanelBody, PanelHeading, PanelTitle } from '@/components/ui/panel';
-import type { Jurisdiction, PackageItem } from '@/types';
+import type { BookSuggestion, Jurisdiction, PackageItem } from '@/types';
 
 /**
  * "Registered" or "Not registered yet", the words volunteers see, with the
@@ -26,6 +26,63 @@ interface PackageItemListProps {
   onDelete: (item: PackageItem) => void;
   /** Codes of the inmate's other requests with the same book, by item id. */
   sentBefore?: Record<number, string[]>;
+  /** A better spelling of an item's title and author, by item id; `saving` while it's being taken. */
+  spelling?: Record<number, Pick<BookSuggestion, 'title' | 'author'> & { saving: boolean }>;
+  /** Take the item's spelling suggestion. */
+  onUseSpelling?: (item: PackageItem) => void;
+  /** Turn the item's spelling suggestion down. */
+  onKeepSpelling?: (item: PackageItem) => void;
+}
+
+/**
+ * One line under a book's title offering a better spelling. Its buttons
+ * leave the focus where it was (the scan input), as the dialog's do.
+ */
+function SpellingNotice({
+  item,
+  suggestion,
+  onUse,
+  onKeep,
+}: {
+  item: PackageItem;
+  suggestion: Pick<BookSuggestion, 'title' | 'author'> & { saving: boolean };
+  onUse?: (item: PackageItem) => void;
+  onKeep?: (item: PackageItem) => void;
+}) {
+  const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+  return (
+    <div
+      role="group"
+      aria-label={`Spelling suggestion for ${item.title}`}
+      className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal"
+    >
+      <span className="text-muted-foreground">
+        Did you mean “{suggestion.title}” by {suggestion.author}?
+      </span>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-6 px-2 text-xs"
+        disabled={suggestion.saving}
+        onMouseDown={keepFocus}
+        onClick={() => onUse?.(item)}
+      >
+        Use this
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-6 px-2 text-xs"
+        disabled={suggestion.saving}
+        onMouseDown={keepFocus}
+        onClick={() => onKeep?.(item)}
+      >
+        Keep mine
+      </Button>
+    </div>
+  );
 }
 
 /**
@@ -38,6 +95,9 @@ export function PackageItemList({
   onEdit,
   onDelete,
   sentBefore = {},
+  spelling = {},
+  onUseSpelling,
+  onKeepSpelling,
 }: PackageItemListProps) {
   const showStatus = jurisdiction === 'Texas';
 
@@ -71,6 +131,19 @@ export function PackageItemList({
                       <span className="ml-2 inline-flex rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200">
                         Already sent in {sentBefore[item.id].join(', ')}
                       </span>
+                    )}
+                    {!item.registered_at && (
+                      // Present before a suggestion arrives, so it's announced.
+                      <div aria-live="polite">
+                        {spelling[item.id] && (
+                          <SpellingNotice
+                            item={item}
+                            suggestion={spelling[item.id]}
+                            onUse={onUseSpelling}
+                            onKeep={onKeepSpelling}
+                          />
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="py-2 pr-2">{item.author}</td>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -14,7 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useLookupBook, useLookupUpc } from '@/hooks/useBooks';
+import {
+  bookSuggestionQueryKey,
+  canSuggestFor,
+  useBookSuggestion,
+  useLookupBook,
+  useLookupUpc,
+} from '@/hooks/useBooks';
 import { ApiError, getValidationErrors } from '@/lib/api';
 import { classifyBarcode, isBareUpc, NOT_A_BARCODE, type BookBarcode } from '@/lib/barcode';
 import {
@@ -39,6 +45,10 @@ const SCAN_GAP_MS = 50;
 const SCAN_MIN_KEYS = 6;
 const SCAN_MIN_DIGITS = 12;
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock']);
+
+// A typed title and author are looked up for a better spelling once the
+// volunteer pauses this long (or leaves Author).
+export const SPELLING_PAUSE_MS = 600;
 
 const itemSchema = z.object({
   barcode: z
@@ -82,6 +92,11 @@ export interface ItemFormResult {
   rememberBook: boolean;
   /** Edit only: "Fix this title for all future scans". */
   updateCache: boolean;
+  /**
+   * Look the saved title and author up for a better spelling after saving:
+   * the form may, but none was shown or turned down for them.
+   */
+  checkSpelling: boolean;
 }
 
 export interface ItemFormDialogProps {
@@ -98,6 +113,13 @@ export interface ItemFormDialogProps {
   initialErrors?: Partial<Record<ItemField, string>>;
   /** Show the prefilled title and author's errors from the start. */
   validateOnOpen?: boolean;
+  /**
+   * Offer a better spelling of a typed title and author (never for a book
+   * registered on the portal).
+   */
+  suggestSpelling?: boolean;
+  /** The default title and author are a lookup's: no spelling is offered for them as they are. */
+  defaultsLookedUp?: boolean;
   /**
    * Save the item. A thrown 422 is shown on its fields; any other error is
    * shown above the buttons. The caller closes the dialog.
@@ -169,6 +191,11 @@ function itemSource(
   return 'isbn';
 }
 
+/** A title and author as compared for spelling suggestions (cleaned, case-folded). */
+function textKey(title: string, author: string): string {
+  return bookSuggestionQueryKey(title, author).join('\n');
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -207,6 +234,8 @@ function ItemForm({
   initialLookup,
   initialErrors,
   validateOnOpen,
+  suggestSpelling = false,
+  defaultsLookedUp = false,
   onSubmit,
   onCancel,
   onSavingChange,
@@ -251,6 +280,18 @@ function ItemForm({
       ? code.code
       : null;
   });
+  // The title and author last looked up for a better spelling.
+  const [asked, setAsked] = useState<{ title: string; author: string } | null>(null);
+  // Titles and authors (by textKey) not to offer a spelling for: a lookup's,
+  // a suggestion taken, or what the volunteer kept.
+  const [quiet, setQuiet] = useState<ReadonlySet<string>>(() =>
+    defaultsLookedUp || initialLookup?.status === 'found'
+      ? new Set([textKey(defaultValues.title, defaultValues.author)])
+      : new Set()
+  );
+  const hush = (title: string, author: string) =>
+    setQuiet((current) => new Set(current).add(textKey(title, author)));
+  const [initialText] = useState(() => [defaultValues.title, defaultValues.author]);
   // The barcode as a scanner last typed it (a scan is read more leniently).
   const scannedText = useRef<string | null>(defaultValues.barcode.trim() || null);
   const lastLookedUp = useRef(defaultValues.barcode.trim());
@@ -297,6 +338,22 @@ function ItemForm({
 
   const [barcode, title, author] = useWatch({ control, name: ['barcode', 'title', 'author'] });
 
+  /** Look up a better spelling of the title and author now in the form. */
+  const askAboutTyped = useCallback(() => {
+    const [typedTitle, typedAuthor] = getValues(['title', 'author']);
+    const next = { title: cleanPortalText(typedTitle), author: cleanPortalText(typedAuthor) };
+    setAsked((current) =>
+      current?.title === next.title && current.author === next.author ? current : next
+    );
+  }, [getValues]);
+
+  // Once the volunteer stops typing in Title or Author for a moment.
+  useEffect(() => {
+    if (!suggestSpelling || (title === initialText[0] && author === initialText[1])) return;
+    const timer = setTimeout(askAboutTyped, SPELLING_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [title, author, suggestSpelling, initialText, askAboutTyped]);
+
   const classify = (value: string) =>
     value.trim() ? classifyBarcode(value, { scanned: value.trim() === scannedText.current }) : null;
   const code = classify(barcode ?? '');
@@ -317,6 +374,30 @@ function ItemForm({
         }
       : null;
 
+  // A better spelling, only without a book found for the barcode (a stronger
+  // signal than the title, whose offer the slot shows instead), and only for
+  // the text as it was looked up: editing drops it.
+  const mayCheckSpelling = (checkTitle: string, checkAuthor: string) =>
+    suggestSpelling &&
+    !found &&
+    canSuggestFor(checkTitle, checkAuthor) &&
+    !quiet.has(textKey(checkTitle, checkAuthor));
+  const askedNow = asked !== null && mayCheckSpelling(asked.title, asked.author);
+  const { data: spellingAnswer } = useBookSuggestion(
+    asked?.title ?? '',
+    asked?.author ?? '',
+    askedNow
+  );
+  const typedKey = textKey(title ?? '', author ?? '');
+  const spelling: Suggestion | null =
+    !suggestion &&
+    askedNow &&
+    textKey(asked.title, asked.author) === typedKey &&
+    spellingAnswer &&
+    textKey(spellingAnswer.title, spellingAnswer.author) !== typedKey
+      ? { title: spellingAnswer.title, author: spellingAnswer.author }
+      : null;
+
   /** Fill empty Title and Author from a lookup; true if both are now fine. */
   const fillFrom = (book: Book) => {
     const filled = {
@@ -326,6 +407,8 @@ function ItemForm({
     for (const field of ['title', 'author'] as const) {
       if (filled[field]) setValue(field, filled[field], { shouldValidate: true });
     }
+    const [filledTitle, filledAuthor] = getValues(['title', 'author']);
+    hush(filledTitle, filledAuthor);
     return isPortalLength(filled.title) && isPortalLength(filled.author);
   };
 
@@ -459,6 +542,8 @@ function ItemForm({
         source: itemSource(cleanTitle, cleanAuthor, itemIsbn, matching),
         rememberBook: showRemember && values.rememberBook,
         updateCache: values.updateCache,
+        // Saved with a suggestion showing: kept as typed.
+        checkSpelling: !spelling && mayCheckSpelling(cleanTitle, cleanAuthor),
       });
     } catch (error) {
       const fieldErrors = getValidationErrors(error);
@@ -530,23 +615,35 @@ function ItemForm({
         label="Author"
         length={cleanPortalText(author ?? '').length}
         error={errors.author?.message}
-        inputProps={register('author')}
+        inputProps={register('author', {
+          onBlur: () => suggestSpelling && askAboutTyped(),
+        })}
         help='No author on the book? Type "Unknown".'
       />
 
       <SuggestionSlot
-        label="From the barcode"
-        suggestion={suggestion}
+        label={suggestion ? 'From the barcode' : 'Did you mean:'}
+        suggestion={suggestion ?? spelling}
         onUse={() => {
-          if (found) {
-            setValue('title', cleanPortalText(found.book.title), { shouldValidate: true });
-            setValue('author', cleanPortalText(found.book.author ?? ''), {
-              shouldValidate: true,
-            });
+          if (suggestion && found) {
+            const looked = {
+              title: cleanPortalText(found.book.title),
+              author: cleanPortalText(found.book.author ?? ''),
+            };
+            setValue('title', looked.title, { shouldValidate: true });
+            setValue('author', looked.author, { shouldValidate: true });
             setSettled(found.code);
+            hush(looked.title, looked.author);
+          } else if (spelling) {
+            setValue('title', spelling.title, { shouldValidate: true });
+            setValue('author', spelling.author ?? '', { shouldValidate: true });
+            hush(spelling.title, spelling.author ?? '');
           }
         }}
-        onKeep={() => found && setSettled(found.code)}
+        onKeep={() => {
+          if (suggestion && found) setSettled(found.code);
+          else if (spelling) hush(title ?? '', author ?? '');
+        }}
       />
 
       {mode === 'add' && (
