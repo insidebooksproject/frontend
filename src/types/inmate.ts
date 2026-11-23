@@ -24,6 +24,13 @@ export interface Inmate extends InmateBase {
   requests: Request[];
   comments: Comment[];
   lookups: Lookup[];
+  /** Pronouns the person stated in a letter; null (or absent) when none were
+   *  stated. Never inferred from `sex`, and never printed on a label. */
+  pronouns?: string | null;
+  /** Initials of the volunteer who recorded `pronouns`. */
+  pronouns_set_by?: string | null;
+  /** When `pronouns` were recorded (ISO 8601, UTC). */
+  pronouns_set_at?: string | null;
 }
 
 export interface InmateSearchResult extends InmateBase {

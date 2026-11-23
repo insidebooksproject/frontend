@@ -1,6 +1,7 @@
 export * from './useInmates';
 export * from './useRequests';
 export * from './useComments';
+export * from './usePronouns';
 export * from './useUnits';
 export * from './useMetrics';
 export * from './useShippingSettings';
