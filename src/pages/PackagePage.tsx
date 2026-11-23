@@ -679,9 +679,12 @@ function PackageWorkspace({
             note: form.note,
             initialErrors: form.initialErrors,
             validateOnOpen: form.validateOnOpen,
+            suggestSpelling: true,
           }
         : {
             mode: 'edit',
+            suggestSpelling: !form.item.registered_at,
+            defaultsLookedUp: form.item.source === 'isbn',
             defaultValues: {
               barcode: form.item.isbn ?? '',
               title: form.item.title,

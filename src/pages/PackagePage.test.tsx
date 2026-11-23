@@ -6,8 +6,9 @@ import { createWrapper } from '@/test/utils';
 import { ApiError } from '@/lib/api/client';
 import { getPackage } from '@/lib/api/packages';
 import { addPackageItem, deletePackageItem, updatePackageItem } from '@/lib/api/items';
-import { getBook, getBookByUpc } from '@/lib/api/books';
-import type { Book, Package, PackageItem, PackageItemCreated } from '@/types';
+import { getBook, getBookByUpc, getBookSuggestion } from '@/lib/api/books';
+import { SPELLING_PAUSE_MS } from '@/components/packages/ItemFormDialog';
+import type { Book, BookSuggestion, Package, PackageItem, PackageItemCreated } from '@/types';
 import { PackagePage } from './PackagePage';
 
 vi.mock('@/lib/api/packages');
@@ -111,6 +112,7 @@ describe('PackagePage', () => {
     vi.mocked(getPackage).mockReset();
     vi.mocked(getBook).mockReset();
     vi.mocked(getBookByUpc).mockReset();
+    vi.mocked(getBookSuggestion).mockReset();
     vi.mocked(addPackageItem).mockReset();
     vi.mocked(updatePackageItem).mockReset();
     vi.mocked(deletePackageItem).mockReset();
@@ -1141,6 +1143,300 @@ describe('PackagePage', () => {
           source: 'manual',
           remember_book: true,
           upc: UPC_ADD_ON,
+        })
+      );
+    });
+  });
+
+  describe('spelling suggestions', () => {
+    const barcodeInput = () => page.getByLabelText('Barcode number (optional)');
+    const titleField = () => page.getByLabelText('Title', { exact: true });
+    const authorField = () => page.getByLabelText('Author');
+    const didYouMean = () => page.getByRole('group', { name: 'Did you mean:' });
+    const fromBarcode = () => page.getByRole('group', { name: 'From the barcode' });
+
+    const mobyDick: BookSuggestion = {
+      title: 'Moby-Dick',
+      author: 'Herman Melville',
+      confidence: 'high',
+      notes: 'The title and author were misspelled.',
+    };
+
+    /** Longer than the typing pause, with room for a busy test browser. */
+    const afterPause = () => new Promise((resolve) => setTimeout(resolve, SPELLING_PAUSE_MS + 400));
+
+    async function openManualForm() {
+      await page.getByRole('button', { name: 'Add without ISBN' }).click();
+      await expect.element(titleField()).toHaveFocus();
+    }
+
+    /** Type a title and author, then leave Author for Title. */
+    async function typeAndLeave(title: string, author: string) {
+      await titleField().fill(title);
+      await authorField().fill(author);
+      await titleField().click();
+    }
+
+    async function showMobyDick() {
+      vi.mocked(getBookSuggestion).mockResolvedValue(mobyDick);
+      await renderPage();
+      await openManualForm();
+      await typeAndLeave('Moby Dik', 'Herman Melvile');
+      await expect.element(didYouMean()).toBeInTheDocument();
+    }
+
+    beforeEach(() => {
+      vi.mocked(getBookSuggestion).mockResolvedValue(null);
+      vi.mocked(addPackageItem).mockImplementation(async (_code, data) =>
+        created({ id: 2, isbn: data.isbn ?? null, title: data.title, author: data.author })
+      );
+    });
+
+    it('looks nothing up until title and author are 3 characters each', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave('Mo', 'Herman Melvile');
+      await afterPause();
+      await typeAndLeave('Moby Dik', ' He ');
+      await afterPause();
+      expect(getBookSuggestion).not.toHaveBeenCalled();
+    });
+
+    it('looks up the typed text on leaving Author', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave(' Moby  Dik', 'Herman Melvile ');
+      await expect.poll(() => getBookSuggestion).toHaveBeenCalledWith('Moby Dik', 'Herman Melvile');
+    });
+
+    it('looks up the typed text after a pause in typing', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await titleField().fill('Moby Dik');
+      await authorField().fill('Herman Melvile');
+      await vi.waitFor(
+        () => expect(getBookSuggestion).toHaveBeenCalledWith('Moby Dik', 'Herman Melvile'),
+        { timeout: 3000 }
+      );
+      await expect.element(authorField()).toHaveFocus();
+    });
+
+    it('asks once for the same text, whatever its case', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave('Moby Dik', 'Herman Melvile');
+      await expect.poll(() => getBookSuggestion).toHaveBeenCalledTimes(1);
+      await typeAndLeave('moby dik ', 'HERMAN MELVILE');
+      await afterPause();
+      expect(getBookSuggestion).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a suggestion, and Use this fills both fields, which stay editable', async () => {
+      await showMobyDick();
+      await expect.element(didYouMean().getByText('“Moby-Dick”')).toBeInTheDocument();
+      await expect.element(didYouMean().getByText('by Herman Melville')).toBeInTheDocument();
+      await expect.element(titleField()).toHaveValue('Moby Dik');
+
+      await didYouMean().getByRole('button', { name: 'Use this' }).click();
+      await expect.element(titleField()).toHaveValue('Moby-Dick');
+      await expect.element(authorField()).toHaveValue('Herman Melville');
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+      await expect.element(titleField()).toHaveFocus();
+      // Neither the barcode nor Remember this book is touched.
+      await expect.element(barcodeInput()).toHaveValue('');
+
+      await titleField().fill('Moby-Dick; or, The Whale');
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Moby-Dick; or, The Whale',
+          author: 'Herman Melville',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('hides the suggestion on Keep mine and offers it no more for that text', async () => {
+      await showMobyDick();
+
+      await didYouMean().getByRole('button', { name: 'Keep mine' }).click();
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+      await expect.element(titleField()).toHaveFocus();
+
+      await typeAndLeave('Moby Dikk', 'Herman Melvile');
+      await expect.element(didYouMean()).toBeInTheDocument();
+      await typeAndLeave('Moby Dik', 'Herman Melvile');
+      await afterPause();
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Moby Dik',
+          author: 'Herman Melvile',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('drops the suggestion when a field is edited, and looks up the new text', async () => {
+      await showMobyDick();
+      vi.mocked(getBookSuggestion).mockResolvedValue(null);
+
+      await titleField().fill('Moby Dic');
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+      await vi.waitFor(
+        () => expect(getBookSuggestion).toHaveBeenCalledWith('Moby Dic', 'Herman Melvile'),
+        { timeout: 3000 }
+      );
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+    });
+
+    it('saves the typed text on Enter in Title while the lookup is pending', async () => {
+      vi.mocked(getBookSuggestion).mockReturnValue(new Promise(() => {}));
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave('Moby Dik', 'Herman Melvile');
+      await expect.poll(() => getBookSuggestion).toHaveBeenCalled();
+      await userEvent.keyboard('{Enter}');
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Moby Dik',
+          author: 'Herman Melvile',
+          source: 'manual',
+        })
+      );
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('saves the typed text on Enter in Title with a suggestion showing', async () => {
+      await showMobyDick();
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Moby Dik',
+          author: 'Herman Melvile',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('saves the typed text on Enter in Author with a suggestion showing', async () => {
+      await showMobyDick();
+      await authorField().click();
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Moby Dik',
+          author: 'Herman Melvile',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('looks nothing up for fields a known barcode filled, even once edited', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().click();
+      await userEvent.keyboard('9780441172719{Enter}');
+      await expect.element(titleField()).toHaveValue('Dune');
+      await authorField().click();
+      await titleField().click();
+      await titleField().fill('Dune: Book One');
+      await authorField().click();
+      await titleField().click();
+      await afterPause();
+      expect(getBookSuggestion).not.toHaveBeenCalled();
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+    });
+
+    it('shows the barcode offer instead of a spelling suggestion', async () => {
+      vi.mocked(getBookSuggestion).mockResolvedValue({
+        ...mobyDick,
+        title: 'Dune',
+        author: 'Frank Herbert',
+      });
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave('Dnue', 'Frank Herbet');
+      await expect.element(didYouMean()).toBeInTheDocument();
+      await barcodeInput().fill('9780441172719');
+      await userEvent.keyboard('{Enter}');
+
+      await expect.element(fromBarcode()).toBeInTheDocument();
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+      expect(await page.getByRole('group').all()).toHaveLength(1);
+    });
+
+    it.each([
+      ['no suggestion', () => vi.mocked(getBookSuggestion).mockResolvedValue(null)],
+      [
+        'a 404',
+        () => vi.mocked(getBookSuggestion).mockRejectedValue(new ApiError(404, 'Not Found')),
+      ],
+      ['a 422', () => vi.mocked(getBookSuggestion).mockRejectedValue(new ApiError(422, '[]'))],
+      [
+        'a network error',
+        () => vi.mocked(getBookSuggestion).mockRejectedValue(new TypeError('Failed to fetch')),
+      ],
+    ])('shows nothing for %s, and saving goes on', async (_name, answer) => {
+      answer();
+      await renderPage();
+      await openManualForm();
+
+      await typeAndLeave('Moby Dik', 'Herman Melvile');
+      await expect.poll(() => getBookSuggestion).toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await expect.element(didYouMean()).not.toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('offers a spelling in the edit dialog once a looked-up title is edited', async () => {
+      vi.mocked(getBookSuggestion).mockResolvedValue({
+        ...mobyDick,
+        title: 'The Odyssey',
+        author: 'Homer',
+      });
+      vi.mocked(updatePackageItem).mockResolvedValue(makeItem());
+      await renderPage();
+
+      await page.getByRole('button', { name: 'Edit The Odyssey' }).click();
+      await authorField().click();
+      await titleField().click();
+      await afterPause();
+      expect(getBookSuggestion).not.toHaveBeenCalled();
+
+      await titleField().fill('The Odysey');
+      await authorField().click();
+      await didYouMean().getByRole('button', { name: 'Use this' }).click();
+      await expect.element(titleField()).toHaveValue('The Odyssey');
+      await page.getByRole('button', { name: 'Save' }).click();
+      await vi.waitFor(() =>
+        expect(updatePackageItem).toHaveBeenCalledWith('TEX-1234567-2', 1, {
+          isbn: '9780140449136',
+          title: 'The Odyssey',
+          author: 'Homer',
+          revision: 0,
+          update_cache: false,
         })
       );
     });
