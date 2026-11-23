@@ -6,7 +6,7 @@ import { createWrapper } from '@/test/utils';
 import { ApiError } from '@/lib/api/client';
 import { getPackage } from '@/lib/api/packages';
 import { addPackageItem, deletePackageItem, updatePackageItem } from '@/lib/api/items';
-import { getBook } from '@/lib/api/books';
+import { getBook, getBookByUpc } from '@/lib/api/books';
 import type { Book, Package, PackageItem, PackageItemCreated } from '@/types';
 import { PackagePage } from './PackagePage';
 
@@ -110,6 +110,7 @@ describe('PackagePage', () => {
     vi.clearAllMocks();
     vi.mocked(getPackage).mockReset();
     vi.mocked(getBook).mockReset();
+    vi.mocked(getBookByUpc).mockReset();
     vi.mocked(addPackageItem).mockReset();
     vi.mocked(updatePackageItem).mockReset();
     vi.mocked(deletePackageItem).mockReset();
@@ -290,7 +291,9 @@ describe('PackagePage', () => {
 
       const dialog = page.getByRole('dialog');
       await expect.element(dialog.getByText(/no book was found/i)).toBeInTheDocument();
-      await expect.element(page.getByLabelText('ISBN (optional)')).toHaveValue('9780140449136');
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue('9780140449136');
       await expect.element(page.getByLabelText('Title', { exact: true })).toHaveFocus();
 
       await page.getByLabelText('Title', { exact: true }).fill('  Some   Book ');
@@ -303,6 +306,7 @@ describe('PackagePage', () => {
           title: 'Some Book',
           author: 'Some One',
           source: 'manual',
+          remember_book: true,
         })
       );
       await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
@@ -316,8 +320,12 @@ describe('PackagePage', () => {
       await scanIsbn('9780140449137');
 
       await expect.element(page.getByRole('dialog')).toBeInTheDocument();
-      await expect.element(page.getByLabelText('ISBN (optional)')).toHaveValue('9780140449137');
-      await expect.element(page.getByText('Not a valid ISBN.')).toBeInTheDocument();
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue('9780140449137');
+      await expect
+        .element(page.getByText("That isn't an ISBN or a UPC.", { exact: false }))
+        .toBeInTheDocument();
     });
 
     it('asks for the author when the lookup has none, keeping source isbn', async () => {
@@ -390,6 +398,126 @@ describe('PackagePage', () => {
         .toBeInTheDocument();
       expect(mockNavigate).not.toHaveBeenCalled();
       expect(getBook).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scanning a UPC', () => {
+    const UPC = '036000291452';
+    const UPC_ADD_ON = UPC + '00799';
+    const upcBook = { ...book, upc_source: 'volunteer' };
+
+    it('adds the book its UPC maps to, as an ISBN scan would', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'found', book: upcBook });
+      vi.mocked(addPackageItem).mockResolvedValue(
+        created({ id: 2, isbn: book.isbn, title: 'Dune', author: 'Frank Herbert' })
+      );
+      await renderPage();
+
+      // As some scanners send it: the UPC as an EAN-13, with a leading 0.
+      await scanIsbn('0' + UPC_ADD_ON);
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: book.isbn,
+          title: 'Dune',
+          author: 'Frank Herbert',
+          source: 'isbn',
+        })
+      );
+      expect(getBookByUpc).toHaveBeenCalledWith(UPC_ADD_ON);
+      expect(getBook).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith('Added “Dune”');
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+      await expect.element(isbnInput()).toHaveFocus();
+    });
+
+    it('opens the form with the UPC kept when IBP has no ISBN for it', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_isbn' });
+      vi.mocked(addPackageItem).mockResolvedValue(
+        created({ id: 2, isbn: null, title: 'Some Paperback', author: 'Some One' })
+      );
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      const dialog = page.getByRole('dialog');
+      await expect
+        .element(
+          dialog.getByText("That's the book's UPC, and IBP doesn't know it yet.", { exact: false })
+        )
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue(UPC_ADD_ON);
+      await expect.element(dialog.getByText(/once it has the book's ISBN/)).toBeInTheDocument();
+      await expect.element(page.getByLabelText('Title', { exact: true })).toHaveFocus();
+      await expect.element(page.getByLabelText('Remember this book')).not.toBeInTheDocument();
+      expect(getBook).not.toHaveBeenCalled();
+
+      await page.getByLabelText('Title', { exact: true }).fill('Some Paperback');
+      await page.getByLabelText('Author').fill('Some One');
+      await page.getByRole('button', { name: 'Add book' }).click();
+
+      // No ISBN to save the UPC under: the book is saved without one.
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Some Paperback',
+          author: 'Some One',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('remembers the title for a UPC whose ISBN has none', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_book', isbn: '9780547928227' });
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      await expect.element(page.getByText(/This UPC is ISBN 9780547928227/)).toBeInTheDocument();
+      await expect.element(page.getByLabelText('Remember this book')).toBeChecked();
+      await page.getByLabelText('Title', { exact: true }).fill('The Hobbit');
+      await page.getByLabelText('Author').fill('Tolkien');
+      await page.getByRole('button', { name: 'Add book' }).click();
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928227',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+          remember_book: true,
+          upc: UPC_ADD_ON,
+        })
+      );
+    });
+
+    it('says a bare UPC can’t tell the book apart', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_isbn' });
+      await renderPage();
+
+      await scanIsbn(UPC);
+
+      await expect.element(page.getByText(/which many books share/)).toBeInTheDocument();
+      await expect
+        .element(page.getByText('This UPC is shared by many books', { exact: false }))
+        .toBeInTheDocument();
+      expect(getBookByUpc).toHaveBeenCalledWith(UPC);
+    });
+
+    it('opens the form when the UPC lookup fails', async () => {
+      vi.mocked(getBookByUpc).mockRejectedValue(new TypeError('Failed to fetch'));
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      await expect
+        .element(page.getByText('The lookup failed (Failed to fetch). Type the title and author.'))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue(UPC_ADD_ON);
     });
   });
 
@@ -614,6 +742,388 @@ describe('PackagePage', () => {
       await page.getByRole('button', { name: 'Cancel' }).click();
       await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
       await expect.element(isbnInput()).toHaveFocus();
+    });
+  });
+
+  describe('the barcode field', () => {
+    const barcodeInput = () => page.getByLabelText('Barcode number (optional)');
+    const titleField = () => page.getByLabelText('Title', { exact: true });
+    const authorField = () => page.getByLabelText('Author');
+    const addButton = () => page.getByRole('button', { name: 'Add book' });
+    const slot = () => page.getByRole('group', { name: 'From the barcode' });
+    const remember = () => page.getByLabelText('Remember this book');
+    const UPC = '036000291452';
+    const UPC_ADD_ON = UPC + '00799';
+
+    /** What a scanner does: type into whatever has the focus, then Enter. */
+    async function scannerTypes(text: string) {
+      await userEvent.keyboard(`${text}{Enter}`);
+    }
+
+    async function openManualForm() {
+      await page.getByRole('button', { name: 'Add without ISBN' }).click();
+      await expect.element(titleField()).toHaveFocus();
+    }
+
+    beforeEach(() => {
+      vi.mocked(addPackageItem).mockImplementation(async (_code, data) =>
+        created({ id: 2, isbn: data.isbn ?? null, title: data.title, author: data.author })
+      );
+    });
+
+    it('takes a scan on Enter without saving, fills the empty fields, then focuses Add', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().click();
+      await scannerTypes('9780441172719');
+
+      await expect.element(titleField()).toHaveValue('Dune');
+      await expect.element(authorField()).toHaveValue('Frank Herbert');
+      await expect.element(addButton()).toHaveFocus();
+      await expect
+        .element(page.getByText('ISBN 9780441172719: the next copy will fill in by itself.'))
+        .toBeInTheDocument();
+      expect(getBook).toHaveBeenCalledWith('9780441172719');
+      expect(addPackageItem).not.toHaveBeenCalled();
+      // Found: nothing to remember.
+      await expect.element(remember()).not.toBeInTheDocument();
+
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780441172719',
+          title: 'Dune',
+          author: 'Frank Herbert',
+          source: 'isbn',
+        })
+      );
+    });
+
+    it('takes a typed code on Enter and moves to Title when nothing is found', async () => {
+      vi.mocked(getBook).mockRejectedValue(new ApiError(404, 'Book not found.'));
+      vi.mocked(addPackageItem).mockResolvedValue({
+        ...created({ id: 2, title: 'The Hobbit', author: 'Tolkien', source: 'manual' }),
+        remembered: ['isbn'],
+      });
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().fill('0-547-92821-1');
+      await userEvent.keyboard('{Enter}');
+
+      await expect.element(titleField()).toHaveFocus();
+      await expect.element(page.getByRole('dialog')).toBeInTheDocument();
+      await expect.element(page.getByText(/doesn't know this book yet/)).toBeInTheDocument();
+      // A known ISBN with no book: remembered unless unticked.
+      await expect.element(remember()).toBeChecked();
+
+      await titleField().fill('The Hobbit');
+      await authorField().fill('Tolkien');
+      await userEvent.keyboard('{Enter}');
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928210',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+          remember_book: true,
+        })
+      );
+      expect(toast.success).toHaveBeenCalledWith('Added “The Hobbit”', {
+        description: 'IBP will remember it: the next copy fills in by itself.',
+      });
+    });
+
+    it('saves without remembering when the box is unticked', async () => {
+      vi.mocked(getBook).mockRejectedValue(new ApiError(404, 'Book not found.'));
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().fill('9780547928227');
+      await titleField().click();
+      await remember().click();
+      await titleField().fill('The Hobbit');
+      await authorField().fill('Tolkien');
+      await addButton().click();
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928227',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('offers no Remember box without a code, or before the lookup answers', async () => {
+      const lookup = new Promise<Book>(() => {});
+      vi.mocked(getBook).mockReturnValue(lookup);
+      await renderPage();
+      await openManualForm();
+      await expect.element(remember()).not.toBeInTheDocument();
+
+      await barcodeInput().fill('9780547928227');
+      await titleField().click();
+      await expect.element(page.getByText('Looking it up...')).toBeInTheDocument();
+      await expect.element(remember()).not.toBeInTheDocument();
+
+      // A slow lookup never holds up saving.
+      await titleField().fill('The Hobbit');
+      await authorField().fill('Tolkien');
+      await addButton().click();
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928227',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('saves despite a failed lookup, with a quiet note', async () => {
+      vi.mocked(getBook).mockRejectedValue(new TypeError('Failed to fetch'));
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().fill('9780547928227');
+      await titleField().click();
+      await expect.element(page.getByText(/Couldn't look it up/)).toBeInTheDocument();
+      await titleField().fill('The Hobbit');
+      await authorField().fill('Tolkien');
+      await addButton().click();
+      await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+    });
+
+    it('moves a scan that lands in Title to the barcode field', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await scannerTypes('9780441172719');
+
+      await expect.element(barcodeInput()).toHaveValue('9780441172719');
+      await expect.element(titleField()).toHaveValue('Dune');
+      await expect.element(authorField()).toHaveValue('Frank Herbert');
+      expect(addPackageItem).not.toHaveBeenCalled();
+    });
+
+    it('keeps what was typed in Title when a scan lands after it', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await titleField().fill('Dune, the novel');
+      await authorField().fill('Herbert');
+      await scannerTypes('9780441172719');
+
+      await expect.element(barcodeInput()).toHaveValue('9780441172719');
+      await expect.element(authorField()).toHaveValue('Herbert');
+      await expect.element(titleField()).toHaveValue('Dune, the novel');
+      await expect.element(slot()).toBeInTheDocument();
+      expect(addPackageItem).not.toHaveBeenCalled();
+    });
+
+    it('lets a short all-digit title be typed and saved with Enter', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await authorField().fill('George Orwell');
+      await titleField().click();
+      await userEvent.keyboard('1984{Enter}');
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: '1984',
+          author: 'George Orwell',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('keeps a long number typed slowly in Title as the title', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await authorField().fill('Anonymous');
+      await titleField().click();
+      for (const digit of '9780441172719') {
+        await userEvent.keyboard(digit);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+      await userEvent.keyboard('{Enter}');
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: '9780441172719',
+          author: 'Anonymous',
+          source: 'manual',
+        })
+      );
+      expect(getBook).not.toHaveBeenCalled();
+    });
+
+    it('replaces the barcode with each new scan', async () => {
+      vi.mocked(getBook).mockRejectedValue(new ApiError(404, 'Book not found.'));
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().click();
+      await scannerTypes('9780441172719');
+      await expect.element(titleField()).toHaveFocus();
+      // The next scan lands in Title.
+      await scannerTypes('9780547928227');
+      await expect.element(barcodeInput()).toHaveValue('9780547928227');
+      await expect.element(titleField()).toHaveValue('');
+      // And one scanned into the barcode field replaces it too.
+      await barcodeInput().click();
+      await scannerTypes('9780140449136');
+      await expect.element(barcodeInput()).toHaveValue('9780140449136');
+      expect(addPackageItem).not.toHaveBeenCalled();
+    });
+
+    it('offers the looked-up book beside typed fields, and Use this takes it', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await titleField().fill('dune');
+      await authorField().fill('Herbert');
+      await barcodeInput().fill('9780441172719');
+      await userEvent.keyboard('{Enter}');
+
+      await expect.element(slot()).toBeInTheDocument();
+      await expect.element(slot().getByText('“Dune”')).toBeInTheDocument();
+      await expect.element(slot().getByText('by Frank Herbert')).toBeInTheDocument();
+      await expect.element(titleField()).toHaveValue('dune');
+
+      await slot().getByRole('button', { name: 'Use this' }).click();
+      await expect.element(titleField()).toHaveValue('Dune');
+      await expect.element(authorField()).toHaveValue('Frank Herbert');
+      await expect.element(slot()).not.toBeInTheDocument();
+
+      await addButton().click();
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780441172719',
+          title: 'Dune',
+          author: 'Frank Herbert',
+          source: 'isbn',
+        })
+      );
+    });
+
+    it('keeps the typed fields on Keep mine, and Enter still saves', async () => {
+      vi.mocked(getBook).mockResolvedValue(book);
+      await renderPage();
+      await openManualForm();
+
+      await titleField().fill('Dune (abridged)');
+      await authorField().fill('Herbert');
+      await barcodeInput().fill('9780441172719');
+      await userEvent.keyboard('{Enter}');
+      await slot().getByRole('button', { name: 'Keep mine' }).click();
+
+      await expect.element(slot()).not.toBeInTheDocument();
+      await expect.element(titleField()).toHaveValue('Dune (abridged)');
+      await expect.element(titleField()).toHaveFocus();
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780441172719',
+          title: 'Dune (abridged)',
+          author: 'Herbert',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('explains a bare UPC and saves the book without it', async () => {
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().fill(UPC);
+      await titleField().click();
+      await expect
+        .element(page.getByText('This UPC is shared by many books', { exact: false }))
+        .toBeInTheDocument();
+      await titleField().fill('Some Paperback');
+      await authorField().fill('Some Author');
+      await addButton().click();
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Some Paperback',
+          author: 'Some Author',
+          source: 'manual',
+        })
+      );
+      expect(getBookByUpc).not.toHaveBeenCalled();
+    });
+
+    it('fills in from a UPC with its add-on', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({
+        status: 'found',
+        book: { ...book, upc_source: 'volunteer' },
+      });
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().click();
+      await scannerTypes('0' + UPC_ADD_ON);
+
+      await expect.element(titleField()).toHaveValue('Dune');
+      await expect
+        .element(page.getByText('UPC with add-on: the next copy will fill in by itself.'))
+        .toBeInTheDocument();
+      expect(getBookByUpc).toHaveBeenCalledWith(UPC_ADD_ON);
+      await addButton().click();
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: book.isbn,
+          title: 'Dune',
+          author: 'Frank Herbert',
+          source: 'isbn',
+          upc: UPC_ADD_ON,
+        })
+      );
+    });
+
+    it('remembers an unknown UPC for the ISBN found inside the cover', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_isbn' });
+      vi.mocked(getBook).mockRejectedValue(new ApiError(404, 'Book not found.'));
+      await renderPage();
+      await openManualForm();
+
+      await barcodeInput().click();
+      await scannerTypes(UPC_ADD_ON);
+      await expect.element(page.getByText(/once it has the book's ISBN/)).toBeInTheDocument();
+
+      // The ISBN from inside the cover, scanned next, replaces the UPC.
+      await scannerTypes('9780547928227');
+      await expect.element(barcodeInput()).toHaveValue('9780547928227');
+      await expect.element(remember()).toBeChecked();
+      await titleField().fill('The Hobbit');
+      await authorField().fill('Tolkien');
+      await addButton().click();
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928227',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+          remember_book: true,
+          upc: UPC_ADD_ON,
+        })
+      );
     });
   });
 

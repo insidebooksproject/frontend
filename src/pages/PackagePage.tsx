@@ -11,21 +11,32 @@ import {
   ItemFormDialog,
   PackageHeader,
   PackageItemList,
+  type BarcodeLookup,
   type ItemFormDialogProps,
+  type ItemFormResult,
   type ItemFormValues,
 } from '@/components/packages';
 import {
   useAddPackageItem,
   useDeletePackageItem,
   useLookupBook,
+  useLookupUpc,
   usePackage,
   useUpdatePackageItem,
 } from '@/hooks';
 import { ApiError } from '@/lib/api';
+import { classifyBarcode, isBareUpc, NOT_A_BARCODE, type BookBarcode } from '@/lib/barcode';
 import { normalizeIsbn } from '@/lib/isbn';
 import { looksLikePackageCode } from '@/lib/packageScan';
 import { cleanPortalText, isPortalLength } from '@/lib/portalText';
-import type { Book, Package, PackageItem, PackageItemCreate, PackageItemCreated } from '@/types';
+import type {
+  Book,
+  Package,
+  PackageItem,
+  PackageItemCreate,
+  PackageItemCreated,
+  UpcLookup,
+} from '@/types';
 
 /** `/packages/:code`: record the books in one package. */
 export function PackagePage() {
@@ -92,7 +103,13 @@ function PackageError({ code, error }: { code: string; error: Error | null }) {
   );
 }
 
-const EMPTY_FORM: ItemFormValues = { isbn: '', title: '', author: '', updateCache: false };
+const EMPTY_FORM: ItemFormValues = {
+  barcode: '',
+  title: '',
+  author: '',
+  updateCache: false,
+  rememberBook: true,
+};
 
 type FormRequest =
   | {
@@ -101,8 +118,8 @@ type FormRequest =
       note?: string;
       initialErrors?: ItemFormDialogProps['initialErrors'];
       validateOnOpen?: boolean;
-      /** The lookup the form was prefilled from, if any. */
-      lookup?: Book;
+      /** The lookup already made for the scanned barcode, if any. */
+      initialLookup?: BarcodeLookup;
       /** Opened for a scanned book, which stays pending until the form closes. */
       fromScan?: boolean;
     }
@@ -159,16 +176,8 @@ function isConflict(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409;
 }
 
-/**
- * `source: 'isbn'` when the title (and the author, if the lookup had one)
- * are the lookup's, so the packer only typed a missing author; otherwise the
- * book was typed in.
- */
-function itemSource(values: ItemFormValues, lookup?: Book): PackageItemCreate['source'] {
-  if (!lookup || !values.isbn || normalizeIsbn(values.isbn) !== lookup.isbn) return 'manual';
-  if (values.title !== cleanPortalText(lookup.title)) return 'manual';
-  if (lookup.author?.trim() && values.author !== cleanPortalText(lookup.author)) return 'manual';
-  return 'isbn';
+function found(book: Book): BarcodeLookup {
+  return { code: book.isbn, status: 'found', book };
 }
 
 function ScanStatus({ current, waiting, held }: ScanState) {
@@ -202,6 +211,7 @@ function PackageWorkspace({
 }) {
   const navigate = useNavigate();
   const lookupBook = useLookupBook();
+  const lookupUpc = useLookupUpc();
   const addItem = useAddPackageItem(code);
   const updateItem = useUpdatePackageItem(code);
   const deleteItem = useDeletePackageItem(code);
@@ -387,7 +397,13 @@ function PackageWorkspace({
 
   const recordAdded = (item: PackageItemCreated) => {
     if (!alive.current) return;
-    toast.success(`Added “${item.title}”`);
+    if (item.remembered?.length) {
+      toast.success(`Added “${item.title}”`, {
+        description: 'IBP will remember it: the next copy fills in by itself.',
+      });
+    } else {
+      toast.success(`Added “${item.title}”`);
+    }
     if (item.previously_sent.length > 0) {
       setSentBefore((current) => ({
         ...current,
@@ -421,9 +437,9 @@ function PackageWorkspace({
         // The backend's checks disagreed with ours: let the packer fix it.
         openOrHold({
           mode: 'add',
-          defaults: { ...EMPTY_FORM, isbn: book.isbn, title: data.title, author: data.author },
+          defaults: { ...EMPTY_FORM, barcode: book.isbn, title: data.title, author: data.author },
           note: `The book couldn't be added as looked up: ${error.message}`,
-          lookup: book,
+          initialLookup: found(book),
           validateOnOpen: true,
           fromScan: true,
         });
@@ -452,40 +468,99 @@ function PackageWorkspace({
     void drain();
   };
 
+  /** A scanned UPC: looked up in IBP's UPC map, then handled as its ISBN would be. */
+  const processUpcScan = async (upc: Extract<BookBarcode, { kind: 'upc' }>) => {
+    const { code } = upc;
+    let answer: UpcLookup;
+    try {
+      answer = await lookupUpc(code);
+    } catch (error) {
+      openOrHold({
+        mode: 'add',
+        defaults: { ...EMPTY_FORM, barcode: code },
+        note: `The lookup failed (${errorMessage(error)}). Type the title and author.`,
+        initialLookup: { code, status: 'failed', message: errorMessage(error) },
+        fromScan: true,
+      });
+      return;
+    }
+    if (!alive.current) return;
+    if (answer.status === 'found') {
+      await processFound(answer.book);
+      return;
+    }
+    openOrHold({
+      mode: 'add',
+      defaults: { ...EMPTY_FORM, barcode: code },
+      note:
+        answer.status === 'no_book'
+          ? `This UPC is ISBN ${answer.isbn}, but IBP has no title for it yet. Type the title and author.`
+          : isBareUpc(upc)
+            ? "That's the book's UPC, which many books share, so it can't tell which book this is. Type the title and author."
+            : "That's the book's UPC, and IBP doesn't know it yet. Type the title and author.",
+      initialLookup:
+        answer.status === 'no_book'
+          ? { code, status: 'not_found', isbn: answer.isbn }
+          : { code, status: 'not_found' },
+      fromScan: true,
+    });
+  };
+
   const processScan = async (isbn: string) => {
+    const scanned = classifyBarcode(isbn);
+    if (scanned?.kind === 'upc') {
+      await processUpcScan(scanned);
+      return;
+    }
     let book: Book;
     try {
       book = await lookupBook(isbn);
     } catch (error) {
       const status = error instanceof ApiError ? error.status : null;
+      const code = normalizeIsbn(isbn) ?? isbn.trim();
       openOrHold({
         mode: 'add',
-        defaults: { ...EMPTY_FORM, isbn },
+        defaults: { ...EMPTY_FORM, barcode: isbn },
         note:
           status === 422
             ? "That isn't a valid ISBN. Check the number, or clear it and type the title and author."
             : status === 404
               ? 'No book was found for this ISBN. Type the title and author.'
               : `The lookup failed (${errorMessage(error)}). Type the title and author.`,
-        initialErrors: status === 422 ? { isbn: 'Not a valid ISBN.' } : undefined,
+        initialErrors: status === 422 ? { barcode: NOT_A_BARCODE } : undefined,
+        initialLookup:
+          status === 422
+            ? undefined
+            : status === 404
+              ? { code, status: 'not_found' }
+              : { code, status: 'failed', message: errorMessage(error) },
         fromScan: true,
       });
       return;
     }
     if (!alive.current) return;
+    await processFound(book);
+  };
 
+  /** A looked-up book: added straight away, or the form opened to fix it. */
+  const processFound = async (book: Book) => {
     if (isPortalLength(book.title) && isPortalLength(book.author)) {
       await addFromLookup(book);
       return;
     }
     openOrHold({
       mode: 'add',
-      defaults: { ...EMPTY_FORM, isbn: book.isbn, title: book.title, author: book.author ?? '' },
+      defaults: {
+        ...EMPTY_FORM,
+        barcode: book.isbn,
+        title: book.title,
+        author: book.author ?? '',
+      },
       note: !book.author?.trim()
         ? 'The lookup found no author. Type one (or "Unknown" if the book has none).'
         : 'Check the title and author: the portal needs each to be 3 to 100 characters.',
       validateOnOpen: true,
-      lookup: book,
+      initialLookup: found(book),
       fromScan: true,
     });
   };
@@ -522,17 +597,20 @@ function PackageWorkspace({
     void drain();
   };
 
-  const handleFormSubmit = async (open: FormState, values: ItemFormValues) => {
-    const isbn = values.isbn || null;
+  const handleFormSubmit = async (open: FormState, values: ItemFormResult) => {
+    const { isbn } = values;
 
     if (open.mode === 'add') {
+      const data: PackageItemCreate = {
+        isbn,
+        title: values.title,
+        author: values.author,
+        source: values.source,
+      };
+      if (values.rememberBook) data.remember_book = true;
+      if (values.upc) data.upc = values.upc;
       try {
-        const created = await addItem.mutateAsync({
-          isbn,
-          title: values.title,
-          author: values.author,
-          source: itemSource(values, open.lookup),
-        });
+        const created = await addItem.mutateAsync(data);
         recordAdded(created);
         closeForm(open.id);
       } catch (error) {
@@ -597,6 +675,7 @@ function PackageWorkspace({
         ? {
             mode: 'add',
             defaultValues: form.defaults,
+            initialLookup: form.initialLookup,
             note: form.note,
             initialErrors: form.initialErrors,
             validateOnOpen: form.validateOnOpen,
@@ -604,10 +683,11 @@ function PackageWorkspace({
         : {
             mode: 'edit',
             defaultValues: {
-              isbn: form.item.isbn ?? '',
+              barcode: form.item.isbn ?? '',
               title: form.item.title,
               author: form.item.author,
               updateCache: false,
+              rememberBook: false,
             },
           };
 

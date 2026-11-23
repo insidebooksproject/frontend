@@ -2,11 +2,22 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export class ApiError extends Error {
   status: number;
+  /** The response body parsed as JSON, when it was JSON. */
+  body?: unknown;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
   }
 }
 
@@ -33,9 +44,11 @@ function extractErrorMessage(text: string): string {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = response.statusText;
+    let body: unknown;
 
     try {
       const text = await response.text();
+      body = parseJson(text);
       const extracted = extractErrorMessage(text);
       if (extracted) {
         message = extracted;
@@ -44,7 +57,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
       console.error('Failed to read error response:', error);
     }
 
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, body);
   }
 
   // Handle 204 No Content (no response body)

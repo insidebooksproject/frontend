@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { isCancelledError, useQueryClient } from '@tanstack/react-query';
-import { getBook } from '@/lib/api';
-import type { Book } from '@/types';
+import { getBook, getBookByUpc } from '@/lib/api';
+import type { Book, UpcLookup } from '@/types';
 import { normalizeIsbn } from '@/lib/isbn';
 
 /**
@@ -37,6 +37,34 @@ export function useLookupBook() {
           if (!isCancelledError(error)) throw error;
         }
       }
+    },
+    [queryClient]
+  );
+}
+
+/** The query key of a UPC lookup, by the code (UPC plus any add-on). */
+export function upcQueryKey(code: string) {
+  return ['books', 'upc', code] as const;
+}
+
+/**
+ * A function looking up a book by its UPC code. A book found is cached like
+ * an ISBN lookup; a miss isn't, so a code saved meanwhile (here or at another
+ * station) is found next time.
+ */
+export function useLookupUpc() {
+  const queryClient = useQueryClient();
+
+  return useCallback(
+    async (code: string): Promise<UpcLookup> => {
+      const queryKey = upcQueryKey(code);
+      const result = await queryClient.fetchQuery({
+        queryKey,
+        queryFn: () => getBookByUpc(code),
+        retry: false,
+      });
+      if (result.status !== 'found') queryClient.removeQueries({ queryKey, exact: true });
+      return result;
     },
     [queryClient]
   );

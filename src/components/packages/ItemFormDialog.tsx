@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -14,28 +14,73 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useLookupBook, useLookupUpc } from '@/hooks/useBooks';
 import { ApiError, getValidationErrors } from '@/lib/api';
-import { normalizeIsbn } from '@/lib/isbn';
+import { classifyBarcode, isBareUpc, NOT_A_BARCODE, type BookBarcode } from '@/lib/barcode';
 import {
   cleanPortalText,
   isPortalLength,
   PORTAL_LENGTH_MESSAGE,
   PORTAL_MAX_LENGTH,
 } from '@/lib/portalText';
+import type { Book, ItemSource } from '@/types';
+import { SuggestionSlot, type Suggestion } from './SuggestionSlot';
+
+const BARCODE_HELP =
+  "Scan the book's barcode, or type the number under it. An ISBN (starts 978 or 979; also inside the front cover) is best. IBP remembers this book, so the next copy fills in by itself.";
+const BARE_UPC =
+  "This UPC is shared by many books, so it can't identify this one. Look for an ISBN inside the front cover, or leave this empty.";
+
+// A barcode scanner types its digits a few ms apart and ends with Enter
+// (the Book Portal extension tells scans from typing the same way). The
+// shortest code it sends is 10 digits (an ISBN-10).
+const SCAN_GAP_MS = 50;
+const SCAN_MIN_LENGTH = 10;
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock']);
 
 const itemSchema = z.object({
-  isbn: z.string().refine((value) => !value.trim() || normalizeIsbn(value) !== null, {
-    message: 'Not a valid ISBN.',
-  }),
+  barcode: z
+    .string()
+    .refine((value) => !value.trim() || classifyBarcode(value, { scanned: true }) !== null, {
+      message: NOT_A_BARCODE,
+    }),
   title: z.string().refine(isPortalLength, { message: PORTAL_LENGTH_MESSAGE }),
   author: z.string().refine(isPortalLength, { message: PORTAL_LENGTH_MESSAGE }),
   updateCache: z.boolean(),
+  rememberBook: z.boolean(),
 });
 
 export type ItemFormValues = z.infer<typeof itemSchema>;
 
-type ItemField = 'isbn' | 'title' | 'author';
-const ITEM_FIELDS: ItemField[] = ['isbn', 'title', 'author'];
+type ItemField = 'barcode' | 'title' | 'author';
+const ITEM_FIELDS: ItemField[] = ['barcode', 'title', 'author'];
+
+/**
+ * What looking up the barcode found. `code` is what was looked up: the
+ * ISBN-13, or the UPC code (with its add-on). A UPC IBP maps to an ISBN it
+ * has no title for is `not_found` with that `isbn`.
+ */
+export type BarcodeLookup =
+  | { code: string; status: 'pending' }
+  | { code: string; status: 'found'; book: Book }
+  | { code: string; status: 'not_found'; isbn?: string }
+  | { code: string; status: 'failed'; message: string };
+
+/** The book to save, as the form worked it out. */
+export interface ItemFormResult {
+  /** The ISBN-13: the barcode's, or the one its UPC maps to. */
+  isbn: string | null;
+  /** A UPC code (with its add-on) scanned for the book, to remember for its ISBN. */
+  upc: string | null;
+  title: string;
+  author: string;
+  /** `isbn` when the title and author are the lookup's, as a scan would save them. */
+  source: ItemSource;
+  /** Add only: remember the typed title and author for the ISBN's next scan. */
+  rememberBook: boolean;
+  /** Edit only: "Fix this title for all future scans". */
+  updateCache: boolean;
+}
 
 export interface ItemFormDialogProps {
   open: boolean;
@@ -43,6 +88,8 @@ export interface ItemFormDialogProps {
   onOpenChange: (open: boolean) => void;
   mode: 'add' | 'edit';
   defaultValues: ItemFormValues;
+  /** The lookup already made for the default barcode (a scan's), if any. */
+  initialLookup?: BarcodeLookup;
   /** Why the form opened, e.g. "No book found for this ISBN." */
   note?: string;
   /** Errors to show from the start (e.g. the lookup's "Not a valid ISBN."). */
@@ -50,11 +97,10 @@ export interface ItemFormDialogProps {
   /** Show the prefilled title and author's errors from the start. */
   validateOnOpen?: boolean;
   /**
-   * Save the item, given cleaned values (title and author trimmed, the ISBN
-   * trimmed). A thrown 422 is shown on its fields; any other error is shown
-   * above the buttons. The caller closes the dialog.
+   * Save the item. A thrown 422 is shown on its fields; any other error is
+   * shown above the buttons. The caller closes the dialog.
    */
-  onSubmit: (values: ItemFormValues) => Promise<void>;
+  onSubmit: (values: ItemFormResult) => Promise<void>;
   /** Where the focus goes when the dialog closes. */
   onCloseAutoFocus?: (event: Event) => void;
 }
@@ -84,7 +130,7 @@ export function ItemFormDialog({
             {props.note ??
               (props.mode === 'add'
                 ? 'Type the title and author as they appear on the book.'
-                : 'Correct the title, author or ISBN.')}
+                : 'Correct the title, author or barcode number.')}
           </DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so each opening starts from its defaults. */}
@@ -94,9 +140,53 @@ export function ItemFormDialog({
   );
 }
 
+function lookupKey(code: BookBarcode): string {
+  return code.kind === 'isbn' ? code.isbn : code.code;
+}
+
+/** The ISBN a barcode gives the book: its own, or the one its UPC maps to. */
+function barcodeIsbn(code: BookBarcode | null, lookup: BarcodeLookup | null): string | null {
+  if (!code) return null;
+  if (code.kind === 'isbn') return code.isbn;
+  if (isBareUpc(code)) return null;
+  if (lookup?.status === 'found') return lookup.book.isbn;
+  if (lookup?.status === 'not_found') return lookup.isbn ?? null;
+  return null;
+}
+
+function itemSource(
+  title: string,
+  author: string,
+  isbn: string | null,
+  lookup: BarcodeLookup | null
+): ItemSource {
+  if (lookup?.status !== 'found' || !isbn || lookup.book.isbn !== isbn) return 'manual';
+  const { book } = lookup;
+  if (title !== cleanPortalText(book.title)) return 'manual';
+  if (book.author?.trim() && author !== cleanPortalText(book.author)) return 'manual';
+  return 'isbn';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** `value` without the scanned digits typed into it (normally at its end). */
+function withoutScan(value: string, scanned: string): string {
+  const at = value.lastIndexOf(scanned);
+  return at < 0 ? value : value.slice(0, at) + value.slice(at + scanned.length);
+}
+
+interface KeyStroke {
+  key: string;
+  time: number;
+  target: EventTarget;
+}
+
 function ItemForm({
   mode,
   defaultValues,
+  initialLookup,
   initialErrors,
   validateOnOpen,
   onSubmit,
@@ -110,6 +200,8 @@ function ItemForm({
     register,
     handleSubmit,
     control,
+    getValues,
+    setValue,
     setError,
     setFocus,
     trigger,
@@ -119,22 +211,62 @@ function ItemForm({
     defaultValues,
     mode: 'onTouched',
   });
+  const lookupBook = useLookupBook();
+  const lookupUpc = useLookupUpc();
+
+  const [lookup, setLookupState] = useState<BarcodeLookup | null>(initialLookup ?? null);
+  const lookupRef = useRef(lookup);
+  const setLookup = (next: BarcodeLookup | null) => {
+    lookupRef.current = next;
+    setLookupState(next);
+  };
+  // The lookup whose title and author are in the form already, or were
+  // turned down: its suggestion isn't offered (again).
+  const [settled, setSettled] = useState<string | null>(
+    initialLookup?.status === 'found' ? initialLookup.code : null
+  );
+  // A UPC (with its add-on) IBP had no ISBN for: once the volunteer finds
+  // the ISBN, saving remembers it for this UPC.
+  const [upcForIsbn, setUpcForIsbn] = useState<string | null>(() => {
+    const code = classifyBarcode(defaultValues.barcode, { scanned: true });
+    return code?.kind === 'upc' && initialLookup?.status === 'not_found' && !initialLookup.isbn
+      ? code.code
+      : null;
+  });
+  // The barcode as a scanner last typed it (a scan is read more leniently).
+  const scannedText = useRef<string | null>(defaultValues.barcode.trim() || null);
+  const lastLookedUp = useRef(defaultValues.barcode.trim());
+  const lookupSeq = useRef(0);
+  const strokes = useRef<KeyStroke[]>([]);
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // Focus now (react-hook-form's setFocus waits a tick, which would land
+  // after a lookup that answers at once).
+  const focusField = (field: 'title' | 'author') =>
+    formRef.current?.querySelector<HTMLInputElement>(`#item-${field}`)?.focus();
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => onSavingChange(isSubmitting), [isSubmitting, onSavingChange]);
 
   // On opening: show the errors already known and focus the first field the
-  // packer has to fix or fill (the ISBN only when it's what's wrong).
+  // packer has to fix or fill (the barcode only when it's what's wrong).
   useEffect(() => {
     for (const field of ITEM_FIELDS) {
       const message = initialErrors?.[field];
       if (message) setError(field, { message });
     }
     if (validateOnOpen) {
-      const prefilled = ITEM_FIELDS.filter((field) => field !== 'isbn' && defaultValues[field]);
+      const prefilled = ITEM_FIELDS.filter((field) => field !== 'barcode' && defaultValues[field]);
       if (prefilled.length > 0) void trigger(prefilled);
     }
-    const first: ItemField = initialErrors?.isbn
-      ? 'isbn'
+    const first: ItemField = initialErrors?.barcode
+      ? 'barcode'
       : !isPortalLength(defaultValues.title)
         ? 'title'
         : !isPortalLength(defaultValues.author)
@@ -145,22 +277,172 @@ function ItemForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [isbn, title, author] = useWatch({ control, name: ['isbn', 'title', 'author'] });
+  const [barcode, title, author] = useWatch({ control, name: ['barcode', 'title', 'author'] });
+
+  const classify = (value: string) =>
+    value.trim() ? classifyBarcode(value, { scanned: value.trim() === scannedText.current }) : null;
+  const code = classify(barcode ?? '');
+  const currentLookup = code && lookup?.code === lookupKey(code) ? lookup : null;
+  const isbn = barcodeIsbn(code, currentLookup);
+  const showRemember = mode === 'add' && isbn !== null && currentLookup?.status === 'not_found';
+
+  const found = currentLookup?.status === 'found' ? currentLookup : null;
+  const suggestion: Suggestion | null =
+    found &&
+    settled !== found.code &&
+    ((title ?? '').trim() || (author ?? '').trim()) &&
+    (cleanPortalText(title ?? '') !== cleanPortalText(found.book.title) ||
+      cleanPortalText(author ?? '') !== cleanPortalText(found.book.author ?? ''))
+      ? {
+          title: cleanPortalText(found.book.title),
+          author: found.book.author ? cleanPortalText(found.book.author) : null,
+        }
+      : null;
+
+  /** Fill empty Title and Author from a lookup; true if both are now fine. */
+  const fillFrom = (book: Book) => {
+    const filled = {
+      title: cleanPortalText(book.title),
+      author: cleanPortalText(book.author ?? ''),
+    };
+    for (const field of ['title', 'author'] as const) {
+      if (filled[field]) setValue(field, filled[field], { shouldValidate: true });
+    }
+    return isPortalLength(filled.title) && isPortalLength(filled.author);
+  };
+
+  const runLookup = async (raw: string, scanned: boolean) => {
+    const text = raw.trim();
+    lastLookedUp.current = text;
+    const barcodeCode = text ? classifyBarcode(text, { scanned }) : null;
+    if (!barcodeCode || isBareUpc(barcodeCode)) return;
+    const key = lookupKey(barcodeCode);
+    const known = lookupRef.current;
+    if (known?.code === key && known.status !== 'failed') return;
+
+    const seq = ++lookupSeq.current;
+    setLookup({ code: key, status: 'pending' });
+    let result: BarcodeLookup;
+    try {
+      if (barcodeCode.kind === 'isbn') {
+        result = { code: key, status: 'found', book: await lookupBook(barcodeCode.isbn) };
+      } else {
+        const answer = await lookupUpc(barcodeCode.code);
+        result =
+          answer.status === 'found'
+            ? { code: key, status: 'found', book: answer.book }
+            : answer.status === 'no_book'
+              ? { code: key, status: 'not_found', isbn: answer.isbn }
+              : { code: key, status: 'not_found' };
+      }
+    } catch (error) {
+      result =
+        error instanceof ApiError && error.status === 404
+          ? { code: key, status: 'not_found' }
+          : { code: key, status: 'failed', message: errorMessage(error) };
+    }
+    if (!alive.current || seq !== lookupSeq.current) return;
+    setLookup(result);
+
+    if (result.status === 'not_found' && barcodeCode.kind === 'upc' && !result.isbn) {
+      setUpcForIsbn(barcodeCode.code);
+    }
+    if (result.status !== 'found') return;
+    const [typedTitle, typedAuthor] = getValues(['title', 'author']);
+    if (typedTitle.trim() || typedAuthor.trim()) return; // offered in the slot instead
+    setSettled(key);
+    const both = fillFrom(result.book);
+    const focused = document.activeElement?.id;
+    if (focused === 'item-title' || focused === 'item-barcode') {
+      if (both) submitRef.current?.focus();
+      else if (!isPortalLength(getValues('author'))) focusField('author');
+    }
+  };
+
+  /** Put a code in the barcode field (a scan replaces what was there) and look it up. */
+  const takeBarcode = (raw: string, scanned: boolean, focusTitle: boolean) => {
+    const text = raw.trim();
+    scannedText.current = scanned ? text : null;
+    setValue('barcode', text, { shouldValidate: true, shouldTouch: true });
+    if (text && !classifyBarcode(text, { scanned })) return; // stays, marked
+    if (focusTitle) focusField('title');
+    void runLookup(text, scanned);
+  };
+
+  // Enter in the barcode field takes the code instead of saving. A scan
+  // (digits a few ms apart, then Enter) anywhere else in the form goes to
+  // the barcode field, never into a title. A typed Enter in Title or Author
+  // still saves.
+  const onKeyDownCapture = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (MODIFIER_KEYS.has(e.key)) return;
+    // When the key came in, not when it's handled: a slow render between
+    // keystrokes mustn't break up a scan.
+    const now = e.timeStamp;
+    if (e.key !== 'Enter') {
+      const last = strokes.current.at(-1);
+      const continues =
+        e.key.length === 1 && last && now - last.time <= SCAN_GAP_MS && last.target === e.target;
+      if (!continues) strokes.current = [];
+      if (e.key.length === 1) strokes.current.push({ key: e.key, time: now, target: e.target });
+      return;
+    }
+
+    const keys = strokes.current;
+    strokes.current = [];
+    const last = keys.at(-1);
+    const burst =
+      keys.length >= SCAN_MIN_LENGTH && last && now - last.time <= SCAN_GAP_MS
+        ? keys.map((stroke) => stroke.key).join('')
+        : null;
+    const scan = burst && /^\d+$/.test(burst) ? classifyBarcode(burst, { scanned: true }) : null;
+    const target = e.target as HTMLElement;
+
+    if (target.id === 'item-barcode') {
+      e.preventDefault();
+      if (burst && scan) takeBarcode(burst, true, true);
+      else takeBarcode(getValues('barcode'), false, true);
+      return;
+    }
+    if (!burst || !scan) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (target.id === 'item-title' || target.id === 'item-author') {
+      const field = target.id === 'item-title' ? 'title' : 'author';
+      setValue(field, withoutScan(getValues(field), burst));
+    }
+    takeBarcode(burst, true, false);
+  };
 
   const submit = async (values: ItemFormValues) => {
+    const barcodeCode = classify(values.barcode);
+    const matching =
+      barcodeCode && lookupRef.current?.code === lookupKey(barcodeCode) ? lookupRef.current : null;
+    const itemIsbn = barcodeIsbn(barcodeCode, matching);
+    const upc =
+      barcodeCode?.kind === 'upc' && !isBareUpc(barcodeCode)
+        ? barcodeCode.code
+        : barcodeCode?.kind === 'isbn'
+          ? upcForIsbn
+          : null;
+    const cleanTitle = cleanPortalText(values.title);
+    const cleanAuthor = cleanPortalText(values.author);
     try {
       await onSubmit({
-        ...values,
-        isbn: values.isbn.trim(),
-        title: cleanPortalText(values.title),
-        author: cleanPortalText(values.author),
+        isbn: itemIsbn,
+        upc: itemIsbn ? upc : null,
+        title: cleanTitle,
+        author: cleanAuthor,
+        source: itemSource(cleanTitle, cleanAuthor, itemIsbn, matching),
+        rememberBook: showRemember && values.rememberBook,
+        updateCache: values.updateCache,
       });
     } catch (error) {
       const fieldErrors = getValidationErrors(error);
       const unplaced: string[] = [];
       for (const { field, message } of fieldErrors) {
-        if ((ITEM_FIELDS as string[]).includes(field)) {
-          setError(field as ItemField, { message });
+        const formField = field === 'isbn' || field === 'upc' ? 'barcode' : field;
+        if ((ITEM_FIELDS as string[]).includes(formField)) {
+          setError(formField as ItemField, { message });
         } else {
           unplaced.push(message);
         }
@@ -174,17 +456,42 @@ function ItemForm({
     }
   };
 
+  const barcodeField = register('barcode', {
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => {
+      const text = e.target.value.trim();
+      if (text !== lastLookedUp.current) void runLookup(text, text === scannedText.current);
+    },
+  });
+
   return (
-    <form onSubmit={handleSubmit(submit)} className="space-y-4" noValidate>
+    <form
+      ref={formRef}
+      onSubmit={handleSubmit(submit)}
+      onKeyDownCapture={onKeyDownCapture}
+      className="space-y-4"
+      noValidate
+    >
       <div className="space-y-1">
-        <Label htmlFor="item-isbn">ISBN (optional)</Label>
+        <Label htmlFor="item-barcode">Barcode number (optional)</Label>
         <Input
-          id="item-isbn"
+          id="item-barcode"
           autoComplete="off"
-          aria-invalid={!!errors.isbn}
-          {...register('isbn')}
+          spellCheck={false}
+          aria-invalid={!!errors.barcode}
+          aria-describedby="item-barcode-help"
+          {...barcodeField}
         />
-        {errors.isbn && <p className="text-sm text-destructive">{errors.isbn.message}</p>}
+        <p id="item-barcode-help" className="text-xs text-muted-foreground">
+          {BARCODE_HELP}
+        </p>
+        {/* Room for two lines, so the fields below don't jump as it changes. */}
+        <div style={{ minHeight: '2rem' }} aria-live="polite">
+          {errors.barcode ? (
+            <p className="text-sm text-destructive">{errors.barcode.message}</p>
+          ) : (
+            <BarcodeStatus code={code} lookup={currentLookup} upcForIsbn={upcForIsbn} />
+          )}
+        </div>
       </div>
 
       <TextField
@@ -203,7 +510,38 @@ function ItemForm({
         help='No author on the book? Type "Unknown".'
       />
 
-      {mode === 'edit' && isbn?.trim() && (
+      <SuggestionSlot
+        label="From the barcode"
+        suggestion={suggestion}
+        onUse={() => {
+          if (found) {
+            setValue('title', cleanPortalText(found.book.title), { shouldValidate: true });
+            setValue('author', cleanPortalText(found.book.author ?? ''), {
+              shouldValidate: true,
+            });
+            setSettled(found.code);
+          }
+        }}
+        onKeep={() => found && setSettled(found.code)}
+      />
+
+      {mode === 'add' && (
+        <div className="flex items-center gap-2" style={{ height: '1.25rem' }}>
+          {showRemember && (
+            <>
+              <input
+                id="item-remember"
+                type="checkbox"
+                className="h-4 w-4"
+                {...register('rememberBook')}
+              />
+              <Label htmlFor="item-remember">Remember this book</Label>
+            </>
+          )}
+        </div>
+      )}
+
+      {mode === 'edit' && isbn && (
         <div className="flex items-center gap-2">
           <input
             id="item-update-cache"
@@ -233,11 +571,49 @@ function ItemForm({
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={isSubmitting}>
+        <Button ref={submitRef} type="submit" disabled={isSubmitting}>
           {isSubmitting ? 'Saving...' : mode === 'add' ? 'Add book' : 'Save'}
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+
+/** One line on what the barcode is, and a quiet note on its lookup. */
+function BarcodeStatus({
+  code,
+  lookup,
+  upcForIsbn,
+}: {
+  code: BookBarcode | null;
+  lookup: BarcodeLookup | null;
+  upcForIsbn: string | null;
+}) {
+  if (!code) return null;
+  if (isBareUpc(code)) return <p className="text-xs text-muted-foreground">{BARE_UPC}</p>;
+
+  const upcWithoutIsbn = code.kind === 'upc' && lookup?.status === 'not_found' && !lookup.isbn;
+  const what =
+    code.kind === 'isbn'
+      ? `ISBN ${code.isbn}: the next copy will fill in by itself.`
+      : upcWithoutIsbn
+        ? "UPC with add-on: IBP can remember it once it has the book's ISBN. Scan or type the ISBN from inside the front cover here."
+        : 'UPC with add-on: the next copy will fill in by itself.';
+  const note =
+    lookup?.status === 'pending'
+      ? 'Looking it up...'
+      : lookup?.status === 'failed'
+        ? "Couldn't look it up; type the title and author."
+        : lookup?.status === 'not_found' && !upcWithoutIsbn
+          ? "IBP doesn't know this book yet; type the title and author."
+          : code.kind === 'isbn' && upcForIsbn
+            ? `UPC ${upcForIsbn} is remembered with it.`
+            : null;
+  return (
+    <p className="text-xs text-muted-foreground">
+      {what}
+      {note && <span className="ml-1 italic">{note}</span>}
+    </p>
   );
 }
 

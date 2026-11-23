@@ -27,6 +27,11 @@ export interface PackageItem {
 export interface PackageItemCreated extends PackageItem {
   /** Codes of the inmate's other requests that already contain this ISBN. */
   previously_sent: string[];
+  /**
+   * What the add saved for the next copy: `isbn` (the title and author, for
+   * the ISBN's next scan) and `upc` (the UPC's ISBN).
+   */
+  remembered?: ('isbn' | 'upc')[];
 }
 
 export interface PackageItemCreate {
@@ -35,6 +40,10 @@ export interface PackageItemCreate {
   author: string;
   /** `isbn` (from an ISBN lookup, needs `isbn`) or `manual` (typed in). */
   source: ItemSource;
+  /** Save the title and author for the ISBN's next scan, unless it has one already. */
+  remember_book?: boolean;
+  /** The UPC code (with its add-on) scanned for the book, saved for its ISBN if new. */
+  upc?: string | null;
 }
 
 export interface PackageItemUpdate {
