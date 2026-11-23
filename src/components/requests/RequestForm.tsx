@@ -18,7 +18,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useCreateRequest, useValidateRequest } from '@/hooks';
+import { useCreateRequest, useServerTimeZone, useValidateRequest } from '@/hooks';
+import { isAfterToday, todayDateInTimeZone } from '@/lib/serverDate';
 import type { Jurisdiction, RequestValidationWarnings, Action } from '@/types';
 
 interface RequestFormProps {
@@ -28,6 +29,8 @@ interface RequestFormProps {
 }
 
 const POSTMARK_DATE_COOKIE = 'ibp_last_postmark_date';
+
+const FUTURE_POSTMARK_MESSAGE = "The postmark date can't be in the future.";
 
 const requestSchema = z.object({
   date_postmarked: z.date({ message: 'Postmark date is required' }),
@@ -76,12 +79,20 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
   const fillButtonRef = useRef<HTMLButtonElement>(null);
   const changeTossButtonRef = useRef<HTMLButtonElement>(null);
   const hasInitiallyFocused = useRef(false);
+  const hasRestoredDate = useRef(false);
+
+  // "Today" is the server's date (America/Chicago by default), not the
+  // browser's or UTC's: no postmark date after it can be picked or submitted.
+  const timeZone = useServerTimeZone();
+  const today = todayDateInTimeZone(timeZone);
 
   const createRequestMutation = useCreateRequest(jurisdiction, inmateId);
   const validateRequestMutation = useValidateRequest(jurisdiction, inmateId);
 
   const {
     setValue,
+    setError,
+    clearErrors,
     control,
     formState: { errors },
   } = useForm<RequestFormData>({
@@ -93,13 +104,25 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
 
   const datePostmarked = useWatch({ control, name: 'date_postmarked' });
 
-  // Load postmark date from cookie on mount, only if it was saved today
+  // Load postmark date from cookie on mount, only if it was saved today and
+  // is not after today
   useEffect(() => {
+    if (hasRestoredDate.current) return;
+    hasRestoredDate.current = true;
     const savedDate = loadPostmarkDateSavedToday();
-    if (savedDate) {
+    if (savedDate && !isAfterToday(savedDate, timeZone)) {
       setValue('date_postmarked', savedDate);
     }
-  }, [setValue]);
+  }, [setValue, timeZone]);
+
+  // The calendar disables later days, but a date can still be in the future
+  // by the time it is submitted (e.g. the server's zone arrived after it was
+  // picked), so every submit checks again.
+  const refuseFuturePostmark = (date: Date) => {
+    if (!isAfterToday(date, timeZone)) return false;
+    setError('date_postmarked', { type: 'manual', message: FUTURE_POSTMARK_MESSAGE });
+    return true;
+  };
 
   // Auto-focus Fill button on initial load when date is available
   useEffect(() => {
@@ -120,7 +143,7 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
   }, [showWarningDialog]);
 
   const handleSubmit = async (action: Action) => {
-    if (!datePostmarked) {
+    if (!datePostmarked || refuseFuturePostmark(datePostmarked)) {
       return;
     }
 
@@ -172,8 +195,18 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
     }
   };
 
+  const closeWarningDialog = () => {
+    setShowWarningDialog(false);
+    setWarnings(null);
+    setPendingAction(null);
+  };
+
   const handleConfirmWithWarnings = async () => {
     if (!datePostmarked || !pendingAction) return;
+    if (refuseFuturePostmark(datePostmarked)) {
+      closeWarningDialog();
+      return;
+    }
 
     const requestData = {
       date_postmarked: format(datePostmarked, 'yyyy-MM-dd'),
@@ -184,9 +217,7 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
     try {
       const newRequest = await createRequestMutation.mutateAsync(requestData);
       // Don't reset - keep the date_postmarked value
-      setShowWarningDialog(false);
-      setWarnings(null);
-      setPendingAction(null);
+      closeWarningDialog();
       toast.success('Request filled successfully');
       onRequestCreated?.(newRequest.index, pendingAction);
     } catch (error) {
@@ -197,6 +228,10 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
 
   const handleChangeTossed = async () => {
     if (!datePostmarked) return;
+    if (refuseFuturePostmark(datePostmarked)) {
+      closeWarningDialog();
+      return;
+    }
 
     const tossAction: Action = 'Tossed';
     const requestData = {
@@ -208,9 +243,7 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
     try {
       const newRequest = await createRequestMutation.mutateAsync(requestData);
       // Don't reset - keep the date_postmarked value
-      setShowWarningDialog(false);
-      setWarnings(null);
-      setPendingAction(null);
+      closeWarningDialog();
       toast.success('Request tossed');
       onRequestCreated?.(newRequest.index, tossAction);
     } catch (error) {
@@ -251,7 +284,14 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
               <Calendar
                 mode="single"
                 selected={datePostmarked}
-                onSelect={(date) => date && setValue('date_postmarked', date)}
+                onSelect={(date) => {
+                  if (!date) return;
+                  clearErrors('date_postmarked');
+                  setValue('date_postmarked', date);
+                }}
+                today={today}
+                disabled={{ after: today }}
+                endMonth={today}
               />
             </PopoverContent>
           </Popover>
@@ -282,7 +322,9 @@ export function RequestForm({ jurisdiction, inmateId, onRequestCreated }: Reques
         </div>
 
         {errors.date_postmarked && (
-          <p className="text-sm text-red-500">{errors.date_postmarked.message}</p>
+          <p role="alert" className="text-sm text-red-500">
+            {errors.date_postmarked.message}
+          </p>
         )}
       </div>
 

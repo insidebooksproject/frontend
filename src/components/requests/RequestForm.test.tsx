@@ -4,9 +4,11 @@ import { page } from 'vitest/browser';
 import { QueryWrapper } from '@/test/utils';
 import { RequestForm } from './RequestForm';
 import * as api from '@/lib/api/requests';
+import * as serverConfigApi from '@/lib/api/serverConfig';
 
 // Mock API calls
 vi.mock('@/lib/api/requests');
+vi.mock('@/lib/api/serverConfig');
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -21,9 +23,15 @@ vi.mock('@/components/ui/popover', () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// The real calendar disables days after today (RequestFormCalendar.test.tsx);
+// "Select Future Date" stands in for a future date reaching the form's state
+// some other way, which Fill and Toss must still refuse.
 vi.mock('@/components/ui/calendar', () => ({
   Calendar: ({ onSelect }: { onSelect: (date: Date) => void }) => (
-    <button onClick={() => onSelect(new Date('2024-12-25T12:00:00Z'))}>Select Date</button>
+    <>
+      <button onClick={() => onSelect(new Date('2024-12-25T12:00:00Z'))}>Select Date</button>
+      <button onClick={() => onSelect(new Date(2024, 11, 26))}>Select Future Date</button>
+    </>
   ),
 }));
 
@@ -34,6 +42,9 @@ vi.setSystemTime(MOCK_DATE);
 describe('RequestForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(serverConfigApi.getServerConfig).mockResolvedValue({
+      timezone: 'America/Chicago',
+    });
     // Clear cookies
     document.cookie.split(';').forEach((c) => {
       document.cookie = c
@@ -157,5 +168,31 @@ describe('RequestForm', () => {
 
     const warningText = page.getByText(/inmate entered unit too recently/i);
     await expect.element(warningText).toBeInTheDocument();
+  });
+
+  it.each(['Fill', 'Toss'])('should refuse to %s with a future postmark date', async (name) => {
+    await render(
+      <QueryWrapper>
+        <RequestForm jurisdiction="Texas" inmateId={12345} />
+      </QueryWrapper>
+    );
+
+    await page.getByRole('button', { name: /pick a date/i }).click();
+    await page.getByText('Select Future Date').click();
+    await page.getByRole('button', { name, exact: true }).click();
+
+    await expect
+      .element(page.getByText("The postmark date can't be in the future."))
+      .toBeInTheDocument();
+    expect(api.validateRequest).not.toHaveBeenCalled();
+    expect(api.createRequest).not.toHaveBeenCalled();
+    // Nothing is remembered for the next request either.
+    expect(document.cookie).not.toContain('ibp_last_postmark_date');
+
+    // Picking a valid date clears the message.
+    await page.getByText('Select Date', { exact: true }).click();
+    await expect
+      .element(page.getByText("The postmark date can't be in the future."))
+      .not.toBeInTheDocument();
   });
 });
