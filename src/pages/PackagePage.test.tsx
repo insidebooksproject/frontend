@@ -401,6 +401,126 @@ describe('PackagePage', () => {
     });
   });
 
+  describe('scanning a UPC', () => {
+    const UPC = '036000291452';
+    const UPC_ADD_ON = UPC + '00799';
+    const upcBook = { ...book, upc_source: 'volunteer' };
+
+    it('adds the book its UPC maps to, as an ISBN scan would', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'found', book: upcBook });
+      vi.mocked(addPackageItem).mockResolvedValue(
+        created({ id: 2, isbn: book.isbn, title: 'Dune', author: 'Frank Herbert' })
+      );
+      await renderPage();
+
+      // As some scanners send it: the UPC as an EAN-13, with a leading 0.
+      await scanIsbn('0' + UPC_ADD_ON);
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: book.isbn,
+          title: 'Dune',
+          author: 'Frank Herbert',
+          source: 'isbn',
+        })
+      );
+      expect(getBookByUpc).toHaveBeenCalledWith(UPC_ADD_ON);
+      expect(getBook).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith('Added “Dune”');
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+      await expect.element(isbnInput()).toHaveFocus();
+    });
+
+    it('opens the form with the UPC kept when IBP has no ISBN for it', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_isbn' });
+      vi.mocked(addPackageItem).mockResolvedValue(
+        created({ id: 2, isbn: null, title: 'Some Paperback', author: 'Some One' })
+      );
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      const dialog = page.getByRole('dialog');
+      await expect
+        .element(
+          dialog.getByText("That's the book's UPC, and IBP doesn't know it yet.", { exact: false })
+        )
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue(UPC_ADD_ON);
+      await expect.element(dialog.getByText(/once it has the book's ISBN/)).toBeInTheDocument();
+      await expect.element(page.getByLabelText('Title', { exact: true })).toHaveFocus();
+      await expect.element(page.getByLabelText('Remember this book')).not.toBeInTheDocument();
+      expect(getBook).not.toHaveBeenCalled();
+
+      await page.getByLabelText('Title', { exact: true }).fill('Some Paperback');
+      await page.getByLabelText('Author').fill('Some One');
+      await page.getByRole('button', { name: 'Add book' }).click();
+
+      // No ISBN to save the UPC under: the book is saved without one.
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: null,
+          title: 'Some Paperback',
+          author: 'Some One',
+          source: 'manual',
+        })
+      );
+    });
+
+    it('remembers the title for a UPC whose ISBN has none', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_book', isbn: '9780547928227' });
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      await expect.element(page.getByText(/This UPC is ISBN 9780547928227/)).toBeInTheDocument();
+      await expect.element(page.getByLabelText('Remember this book')).toBeChecked();
+      await page.getByLabelText('Title', { exact: true }).fill('The Hobbit');
+      await page.getByLabelText('Author').fill('Tolkien');
+      await page.getByRole('button', { name: 'Add book' }).click();
+
+      await vi.waitFor(() =>
+        expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+          isbn: '9780547928227',
+          title: 'The Hobbit',
+          author: 'Tolkien',
+          source: 'manual',
+          remember_book: true,
+          upc: UPC_ADD_ON,
+        })
+      );
+    });
+
+    it('says a bare UPC can’t tell the book apart', async () => {
+      vi.mocked(getBookByUpc).mockResolvedValue({ status: 'no_isbn' });
+      await renderPage();
+
+      await scanIsbn(UPC);
+
+      await expect.element(page.getByText(/which many books share/)).toBeInTheDocument();
+      await expect
+        .element(page.getByText('This UPC is shared by many books', { exact: false }))
+        .toBeInTheDocument();
+      expect(getBookByUpc).toHaveBeenCalledWith(UPC);
+    });
+
+    it('opens the form when the UPC lookup fails', async () => {
+      vi.mocked(getBookByUpc).mockRejectedValue(new TypeError('Failed to fetch'));
+      await renderPage();
+
+      await scanIsbn(UPC_ADD_ON);
+
+      await expect
+        .element(page.getByText('The lookup failed (Failed to fetch). Type the title and author.'))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByLabelText('Barcode number (optional)'))
+        .toHaveValue(UPC_ADD_ON);
+    });
+  });
+
   describe('an add that fails', () => {
     it('keeps the book on screen and Done disabled until it is checked', async () => {
       vi.mocked(getBook).mockResolvedValue(book);

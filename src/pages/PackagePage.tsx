@@ -20,15 +20,23 @@ import {
   useAddPackageItem,
   useDeletePackageItem,
   useLookupBook,
+  useLookupUpc,
   usePackage,
   useUpdatePackageItem,
 } from '@/hooks';
 import { ApiError } from '@/lib/api';
-import { NOT_A_BARCODE } from '@/lib/barcode';
+import { classifyBarcode, isBareUpc, NOT_A_BARCODE, type BookBarcode } from '@/lib/barcode';
 import { normalizeIsbn } from '@/lib/isbn';
 import { looksLikePackageCode } from '@/lib/packageScan';
 import { cleanPortalText, isPortalLength } from '@/lib/portalText';
-import type { Book, Package, PackageItem, PackageItemCreate, PackageItemCreated } from '@/types';
+import type {
+  Book,
+  Package,
+  PackageItem,
+  PackageItemCreate,
+  PackageItemCreated,
+  UpcLookup,
+} from '@/types';
 
 /** `/packages/:code`: record the books in one package. */
 export function PackagePage() {
@@ -203,6 +211,7 @@ function PackageWorkspace({
 }) {
   const navigate = useNavigate();
   const lookupBook = useLookupBook();
+  const lookupUpc = useLookupUpc();
   const addItem = useAddPackageItem(code);
   const updateItem = useUpdatePackageItem(code);
   const deleteItem = useDeletePackageItem(code);
@@ -459,7 +468,50 @@ function PackageWorkspace({
     void drain();
   };
 
+  /** A scanned UPC: looked up in IBP's UPC map, then handled as its ISBN would be. */
+  const processUpcScan = async (upc: Extract<BookBarcode, { kind: 'upc' }>) => {
+    const { code } = upc;
+    let answer: UpcLookup;
+    try {
+      answer = await lookupUpc(code);
+    } catch (error) {
+      openOrHold({
+        mode: 'add',
+        defaults: { ...EMPTY_FORM, barcode: code },
+        note: `The lookup failed (${errorMessage(error)}). Type the title and author.`,
+        initialLookup: { code, status: 'failed', message: errorMessage(error) },
+        fromScan: true,
+      });
+      return;
+    }
+    if (!alive.current) return;
+    if (answer.status === 'found') {
+      await processFound(answer.book);
+      return;
+    }
+    openOrHold({
+      mode: 'add',
+      defaults: { ...EMPTY_FORM, barcode: code },
+      note:
+        answer.status === 'no_book'
+          ? `This UPC is ISBN ${answer.isbn}, but IBP has no title for it yet. Type the title and author.`
+          : isBareUpc(upc)
+            ? "That's the book's UPC, which many books share, so it can't tell which book this is. Type the title and author."
+            : "That's the book's UPC, and IBP doesn't know it yet. Type the title and author.",
+      initialLookup:
+        answer.status === 'no_book'
+          ? { code, status: 'not_found', isbn: answer.isbn }
+          : { code, status: 'not_found' },
+      fromScan: true,
+    });
+  };
+
   const processScan = async (isbn: string) => {
+    const scanned = classifyBarcode(isbn);
+    if (scanned?.kind === 'upc') {
+      await processUpcScan(scanned);
+      return;
+    }
     let book: Book;
     try {
       book = await lookupBook(isbn);
@@ -487,7 +539,11 @@ function PackageWorkspace({
       return;
     }
     if (!alive.current) return;
+    await processFound(book);
+  };
 
+  /** A looked-up book: added straight away, or the form opened to fix it. */
+  const processFound = async (book: Book) => {
     if (isPortalLength(book.title) && isPortalLength(book.author)) {
       await addFromLookup(book);
       return;
