@@ -6,8 +6,9 @@ import {
   updatePackageItem,
   deletePackageItem,
 } from '@/lib/api';
-import { bookQueryKey } from './useBooks';
-import type { Book, PackageItemCreate, PackageItemUpdate } from '@/types';
+import type { QueryClient } from '@tanstack/react-query';
+import { bookQueryKey, upcQueryKey } from './useBooks';
+import type { Book, PackageItem, PackageItemCreate, PackageItemUpdate } from '@/types';
 
 export function packageQueryKey(code: string) {
   return ['packages', code] as const;
@@ -34,11 +35,37 @@ export function usePackage(code: string) {
 // Item writes refetch the package whether they succeed or fail: a 409 means
 // the item changed (or was registered) meanwhile, so the page must catch up.
 
+/**
+ * An item's title is now the lookup's answer for its ISBN. A lookup still in
+ * flight would land with the old answer afterwards, so cancel it (scans
+ * retry a cancelled lookup) and cache the item's title.
+ */
+async function cacheItemTitle(queryClient: QueryClient, item: PackageItem & { isbn: string }) {
+  const queryKey = bookQueryKey(item.isbn);
+  await queryClient.cancelQueries({ queryKey, exact: true });
+  queryClient.setQueryData<Book>(queryKey, {
+    isbn: item.isbn,
+    title: item.title,
+    author: item.author,
+    source: 'manual',
+    confidence: null,
+  });
+}
+
 export function useAddPackageItem(code: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (data: PackageItemCreate) => addPackageItem(code, data),
+    onSuccess: async (item, data) => {
+      // Remembered for the next copy: its lookups must find it from now on.
+      const remembered = item.remembered ?? [];
+      if (remembered.includes('isbn') && item.isbn)
+        await cacheItemTitle(queryClient, { ...item, isbn: item.isbn });
+      if (remembered.includes('upc') && data.upc) {
+        queryClient.removeQueries({ queryKey: upcQueryKey(data.upc), exact: true });
+      }
+    },
     // Not awaited: a reload that hangs (offline) mustn't hold back the add's
     // own result, which the package page needs to show a failed add.
     onSettled: () => {
@@ -55,19 +82,8 @@ export function useUpdatePackageItem(code: string) {
       updatePackageItem(code, itemId, data),
     onSuccess: async (item, { data }) => {
       // "Fix this title for all future scans" changed the lookup's answer.
-      // A lookup still in flight would land with the old title afterwards,
-      // so cancel it (scans retry a cancelled lookup) and cache the fix.
-      if (data.update_cache && item.isbn) {
-        const queryKey = bookQueryKey(item.isbn);
-        await queryClient.cancelQueries({ queryKey, exact: true });
-        queryClient.setQueryData<Book>(queryKey, {
-          isbn: item.isbn,
-          title: item.title,
-          author: item.author,
-          source: 'manual',
-          confidence: null,
-        });
-      }
+      if (data.update_cache && item.isbn)
+        await cacheItemTitle(queryClient, { ...item, isbn: item.isbn });
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: packageQueryKey(code) }),
   });

@@ -162,7 +162,9 @@ describe('PackagePage with real routing', () => {
 
     // Then the scanned book's form opens, empty but for its ISBN.
     await expect.element(page.getByRole('heading', { name: 'Add a book' })).toBeInTheDocument();
-    await expect.element(page.getByLabelText('ISBN (optional)')).toHaveValue('9780000000002');
+    await expect
+      .element(page.getByLabelText('Barcode number (optional)'))
+      .toHaveValue('9780000000002');
     await expect.element(titleInput()).toHaveValue('');
     await expect.element(page.getByLabelText('Author')).toHaveValue('');
 
@@ -176,6 +178,7 @@ describe('PackagePage with real routing', () => {
       title: 'A Found Book',
       author: 'Some Author',
       source: 'manual',
+      remember_book: true,
     });
     expect(updatePackageItem).not.toHaveBeenCalled();
   });
@@ -236,6 +239,7 @@ describe('PackagePage with real routing', () => {
     });
     const lookup = deferred<Book>();
     vi.mocked(getBook)
+      .mockRejectedValue(new ApiError(404, 'Book not found.'))
       .mockReturnValueOnce(lookup.promise)
       .mockResolvedValueOnce({ ...dune, isbn: '9780140449136', title: 'The Iliad' })
       .mockResolvedValueOnce({ ...dune, isbn: '9780060850524', title: 'Brave New World' });
@@ -278,7 +282,7 @@ describe('PackagePage with real routing', () => {
 
     // A new ISBN makes it a different book: the warning goes.
     await page.getByRole('button', { name: 'Edit Brave New World (Revisited)' }).click();
-    await page.getByLabelText('ISBN (optional)').fill('0-14-044913-2');
+    await page.getByLabelText('Barcode number (optional)').fill('0-14-044913-2');
     await page.getByRole('button', { name: 'Save' }).click();
     await expect.element(page.getByText('9780140449136').first()).toBeInTheDocument();
     await expect.element(page.getByText(/Already sent in/)).not.toBeInTheDocument();
@@ -309,7 +313,7 @@ describe('PackagePage with real routing', () => {
     await expect.element(page.getByText('Already sent to this inmate')).toBeInTheDocument();
 
     await page.getByRole('button', { name: 'Edit Dune' }).click();
-    await page.getByLabelText('ISBN (optional)').fill('9780140449136');
+    await page.getByLabelText('Barcode number (optional)').fill('9780140449136');
     await page.getByRole('button', { name: 'Save' }).click();
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
     await expect.element(page.getByText('Already sent to this inmate')).not.toBeInTheDocument();

@@ -4,6 +4,9 @@
 // through `normalizeIsbn`, which mirrors the backend.
 import { normalizeIsbn } from './isbn';
 
+/** What the manual-entry form says about a number that's neither. */
+export const NOT_A_BARCODE = "That isn't an ISBN or a UPC. Check the number, or leave this empty.";
+
 export type BookBarcode =
   /** `isbn` is the ISBN-13 (an ISBN-10 converted, an 18-digit scan trimmed). */
   | { kind: 'isbn'; isbn: string }
