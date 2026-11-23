@@ -1177,6 +1177,47 @@ describe('PackagePage', () => {
       await titleField().click();
     }
 
+    /** The book as saved from the form, typed with its misspellings. */
+    const savedMoby = makeItem({
+      id: 2,
+      isbn: null,
+      title: 'Moby Dik',
+      author: 'Herman Melvile',
+      source: 'manual',
+      revision: 1,
+    });
+    const rowNotice = () => page.getByRole('group', { name: 'Spelling suggestion for Moby Dik' });
+
+    /** The list shows `item` once reloaded after the add. */
+    function listAfterSave(item: PackageItem) {
+      vi.mocked(getPackage)
+        .mockReset()
+        .mockResolvedValue(makePackage({ items: [makeItem(), item] }))
+        .mockResolvedValueOnce(makePackage());
+    }
+
+    /** A suggestion lookup answered only when the test says. */
+    function heldAnswer() {
+      let answer!: (suggestion: BookSuggestion | null) => void;
+      vi.mocked(getBookSuggestion).mockReturnValue(
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+      );
+      return (suggestion: BookSuggestion | null) => answer(suggestion);
+    }
+
+    /** Type the misspelled book and save it with Enter in Author. */
+    async function saveMobyDik() {
+      await openManualForm();
+      await titleField().fill('Moby Dik');
+      await authorField().fill('Herman Melvile');
+      await userEvent.keyboard('{Enter}');
+      await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+      await expect.element(page.getByText('Herman Melvile')).toBeInTheDocument();
+    }
+
     async function showMobyDick() {
       vi.mocked(getBookSuggestion).mockResolvedValue(mobyDick);
       await renderPage();
@@ -1361,6 +1402,13 @@ describe('PackagePage', () => {
       await afterPause();
       expect(getBookSuggestion).not.toHaveBeenCalled();
       await expect.element(didYouMean()).not.toBeInTheDocument();
+
+      // Nor after saving.
+      await page.getByRole('button', { name: 'Add book' }).click();
+      await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+      await afterPause();
+      expect(getBookSuggestion).not.toHaveBeenCalled();
     });
 
     it('shows the barcode offer instead of a spelling suggestion', async () => {
@@ -1396,6 +1444,8 @@ describe('PackagePage', () => {
       ],
     ])('shows nothing for %s, and saving goes on', async (_name, answer) => {
       answer();
+      listAfterSave(savedMoby);
+      vi.mocked(addPackageItem).mockResolvedValue(created(savedMoby));
       await renderPage();
       await openManualForm();
 
@@ -1407,6 +1457,9 @@ describe('PackagePage', () => {
 
       await userEvent.keyboard('{Enter}');
       await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+      await expect.element(page.getByText('Herman Melvile')).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await expect.element(rowNotice()).not.toBeInTheDocument();
       expect(toast.error).not.toHaveBeenCalled();
     });
 
@@ -1439,6 +1492,137 @@ describe('PackagePage', () => {
           update_cache: false,
         })
       );
+    });
+
+    describe('after saving', () => {
+      beforeEach(() => {
+        listAfterSave(savedMoby);
+        vi.mocked(addPackageItem).mockResolvedValue(created(savedMoby));
+      });
+
+      it('offers a suggestion that comes later on the row, and Use this saves it', async () => {
+        const answer = heldAnswer();
+        vi.mocked(updatePackageItem).mockResolvedValue(
+          makeItem({ ...savedMoby, title: 'Moby-Dick', author: 'Herman Melville', revision: 2 })
+        );
+        await renderPage();
+        await saveMobyDik();
+
+        answer(mobyDick);
+        await expect.element(rowNotice()).toBeInTheDocument();
+        await expect
+          .element(rowNotice().getByText('Did you mean “Moby-Dick” by Herman Melville?'))
+          .toBeInTheDocument();
+        await expect.element(page.getByRole('button', { name: 'Done' })).toBeEnabled();
+        await expect.element(isbnInput()).toHaveFocus();
+
+        await rowNotice().getByRole('button', { name: 'Use this' }).click();
+        await vi.waitFor(() =>
+          expect(updatePackageItem).toHaveBeenCalledWith('TEX-1234567-2', 2, {
+            isbn: null,
+            title: 'Moby-Dick',
+            author: 'Herman Melville',
+            revision: 1,
+            update_cache: false,
+          })
+        );
+        await expect.element(rowNotice()).not.toBeInTheDocument();
+        await expect.element(isbnInput()).toHaveFocus();
+        expect(getBookSuggestion).toHaveBeenCalledTimes(1);
+        expect(getBookSuggestion).toHaveBeenCalledWith('Moby Dik', 'Herman Melvile');
+      });
+
+      it('keeps the ISBN the book was saved with', async () => {
+        const saved = { ...savedMoby, isbn: '9780547928227' };
+        listAfterSave(saved);
+        vi.mocked(addPackageItem).mockResolvedValue(created(saved));
+        vi.mocked(getBook).mockRejectedValue(new ApiError(404, 'Book not found.'));
+        vi.mocked(updatePackageItem).mockResolvedValue(saved);
+        const answer = heldAnswer();
+        await renderPage();
+        await openManualForm();
+
+        await barcodeInput().fill('9780547928227');
+        await titleField().click();
+        await titleField().fill('Moby Dik');
+        await authorField().fill('Herman Melvile');
+        await userEvent.keyboard('{Enter}');
+        await vi.waitFor(() =>
+          expect(addPackageItem).toHaveBeenCalledWith('TEX-1234567-2', {
+            isbn: '9780547928227',
+            title: 'Moby Dik',
+            author: 'Herman Melvile',
+            source: 'manual',
+            remember_book: true,
+          })
+        );
+
+        answer(mobyDick);
+        await rowNotice().getByRole('button', { name: 'Use this' }).click();
+        await vi.waitFor(() =>
+          expect(updatePackageItem).toHaveBeenCalledWith('TEX-1234567-2', 2, {
+            isbn: '9780547928227',
+            title: 'Moby-Dick',
+            author: 'Herman Melville',
+            revision: 1,
+            update_cache: false,
+          })
+        );
+      });
+
+      it('drops the notice on Keep mine', async () => {
+        const answer = heldAnswer();
+        await renderPage();
+        await saveMobyDik();
+
+        answer(mobyDick);
+        await rowNotice().getByRole('button', { name: 'Keep mine' }).click();
+        await expect.element(rowNotice()).not.toBeInTheDocument();
+        await expect.element(isbnInput()).toHaveFocus();
+        expect(updatePackageItem).not.toHaveBeenCalled();
+      });
+
+      it('drops the notice quietly when the book changed meanwhile', async () => {
+        const answer = heldAnswer();
+        vi.mocked(updatePackageItem).mockRejectedValue(
+          new ApiError(409, 'The book was changed by someone else; reload it.')
+        );
+        await renderPage();
+        await saveMobyDik();
+
+        answer(mobyDick);
+        await rowNotice().getByRole('button', { name: 'Use this' }).click();
+        await vi.waitFor(() => expect(updatePackageItem).toHaveBeenCalledTimes(1));
+        await expect.element(rowNotice()).not.toBeInTheDocument();
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+
+      it('offers nothing on the row when the suggestion showed in the form', async () => {
+        vi.mocked(getBookSuggestion).mockResolvedValue(mobyDick);
+        await renderPage();
+        await openManualForm();
+        await typeAndLeave('Moby Dik', 'Herman Melvile');
+        await expect.element(didYouMean()).toBeInTheDocument();
+        await userEvent.keyboard('{Enter}');
+
+        await vi.waitFor(() => expect(addPackageItem).toHaveBeenCalledTimes(1));
+        await expect.element(page.getByText('Herman Melvile')).toBeInTheDocument();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await expect.element(rowNotice()).not.toBeInTheDocument();
+        expect(getBookSuggestion).toHaveBeenCalledTimes(1);
+      });
+
+      it('offers nothing on the row of a registered book', async () => {
+        listAfterSave({ ...savedMoby, registered_at: '2026-11-23T20:00:00Z' });
+        const answer = heldAnswer();
+        await renderPage();
+        await saveMobyDik();
+
+        answer(mobyDick);
+        await expect.poll(() => getBookSuggestion).toHaveBeenCalled();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await expect.element(rowNotice()).not.toBeInTheDocument();
+      });
     });
   });
 
