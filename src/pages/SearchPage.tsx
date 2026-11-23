@@ -71,7 +71,13 @@ export function SearchPage() {
             Found {data.inmates.length} result{data.inmates.length !== 1 ? 's' : ''}
             {data.errors.length > 0 && ' (partial results due to provider errors)'}
           </p>
-          <InmateSearchResults inmates={data.inmates} errors={data.errors} query={query} />
+          <InmateSearchResults
+            key={query}
+            inmates={data.inmates}
+            staleInmates={data.stale_inmates}
+            errors={data.errors}
+            query={query}
+          />
         </div>
       )}
     </div>

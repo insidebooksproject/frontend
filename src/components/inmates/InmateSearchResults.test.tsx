@@ -129,4 +129,29 @@ describe('InmateSearchResults', () => {
       .toBeInTheDocument();
     expect(page.getByText(/via request/).elements()).toHaveLength(1);
   });
+
+  it('should keep older records behind a button', async () => {
+    await renderWithRouter(
+      <InmateSearchResults inmates={[mockInmates[0]]} staleInmates={[mockInmates[1]]} errors={[]} />
+    );
+
+    await expect.element(page.getByText(/doe, john/i)).toBeInTheDocument();
+    await expect.element(page.getByText(/1 older record not shown/i)).toBeInTheDocument();
+    await expect.element(page.getByText(/smith, jane/i)).not.toBeInTheDocument();
+
+    await page.getByRole('button', { name: /show older records/i }).click();
+    await expect.element(page.getByText(/smith, jane/i)).toBeInTheDocument();
+
+    await page.getByRole('button', { name: /hide older records/i }).click();
+    await expect.element(page.getByText(/smith, jane/i)).not.toBeInTheDocument();
+  });
+
+  it('should say nobody is currently listed when only older records match', async () => {
+    await renderWithRouter(
+      <InmateSearchResults inmates={[]} staleInmates={mockInmates} errors={[]} />
+    );
+
+    await expect.element(page.getByText(/no inmates currently listed/i)).toBeInTheDocument();
+    await expect.element(page.getByText(/2 older records not shown/i)).toBeInTheDocument();
+  });
 });

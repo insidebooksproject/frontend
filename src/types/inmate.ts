@@ -34,6 +34,9 @@ export interface InmateSearchResult extends InmateBase {
 
 export interface InmateSearchResults {
   inmates: InmateSearchResult[];
+  /** Name-search matches set aside as stale: old data for someone their
+   *  provider, asked just now, did not return (most likely released). */
+  stale_inmates?: InmateSearchResult[];
   errors: string[];
   /** Set (by the frontend) when a single result must not be auto-redirected
    *  to, because a lookup that could have found someone else failed. */
