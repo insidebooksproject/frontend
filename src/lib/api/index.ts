@@ -2,6 +2,7 @@ export * from './client';
 export * from './inmates';
 export * from './requests';
 export * from './comments';
+export * from './pronouns';
 export * from './units';
 export * from './metrics';
 export * from './shippingSettings';

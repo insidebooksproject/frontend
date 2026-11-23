@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 import { BrowserRouter } from 'react-router-dom';
@@ -185,5 +185,68 @@ describe('InmateProfile', () => {
     // Should display the verified date
     const verified = page.getByText('2024-12-20', { exact: true });
     await expect.element(verified).toBeInTheDocument();
+  });
+
+  describe('pronouns', () => {
+    const withPronouns: Inmate = {
+      ...mockInmate,
+      pronouns: 'they/them',
+      pronouns_set_by: 'QZ',
+      pronouns_set_at: '2026-11-23T12:00:00+00:00',
+    };
+
+    function labels(container: HTMLElement): string[] {
+      return Array.from(container.querySelectorAll('dt')).map((dt) => dt.textContent ?? '');
+    }
+
+    it('shows no row and no placeholder when none are recorded', async () => {
+      const screen = await renderWithRouter(
+        <InmateProfile inmate={{ ...mockInmate, pronouns: null }} />
+      );
+
+      await expect.element(page.getByText('John Doe')).toBeInTheDocument();
+      expect(labels(screen.container)).not.toContain('Pronouns:');
+      expect(screen.container.textContent).not.toMatch(/pronoun/i);
+    });
+
+    it('offers only a "Record pronouns from a letter" action when none are recorded', async () => {
+      const onEditPronouns = vi.fn();
+      const screen = await renderWithRouter(
+        <InmateProfile inmate={mockInmate} onEditPronouns={onEditPronouns} />
+      );
+
+      const record = page.getByRole('button', { name: 'Record pronouns from a letter' });
+      await expect.element(record).toBeInTheDocument();
+      expect(labels(screen.container)).not.toContain('Pronouns:');
+
+      await record.click();
+      expect(onEditPronouns).toHaveBeenCalledOnce();
+    });
+
+    it('shows a Pronouns row directly after the name, with who recorded it and when', async () => {
+      const screen = await renderWithRouter(<InmateProfile inmate={withPronouns} />);
+
+      const value = page.getByText('they/them');
+      await expect.element(value).toBeInTheDocument();
+      await expect.element(value).toHaveAttribute('title', 'Recorded by QZ on 2026-11-23');
+
+      const rows = labels(screen.container);
+      expect(rows.indexOf('Pronouns:')).toBe(rows.indexOf('Name:') + 1);
+      // Not offered as a value to record, and read-only without a handler.
+      await expect
+        .element(page.getByRole('button', { name: /record pronouns/i }))
+        .not.toBeInTheDocument();
+      await expect.element(page.getByRole('button', { name: /edit/i })).not.toBeInTheDocument();
+    });
+
+    it('offers a small Edit control when set', async () => {
+      const onEditPronouns = vi.fn();
+      await renderWithRouter(
+        <InmateProfile inmate={withPronouns} onEditPronouns={onEditPronouns} />
+      );
+
+      await page.getByRole('button', { name: 'Edit pronouns' }).click();
+      expect(onEditPronouns).toHaveBeenCalledOnce();
+    });
   });
 });

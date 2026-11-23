@@ -8,6 +8,9 @@ import type { Inmate, InmateWarnings } from '@/types';
 interface InmateProfileProps {
   inmate: Inmate;
   warnings?: InmateWarnings;
+  /** Open the dialog to record or edit the pronouns stated in a letter.
+   *  Without it the pronouns, if any, are shown read-only. */
+  onEditPronouns?: () => void;
 }
 
 const NOT_AVAILABLE = 'Not Available';
@@ -46,7 +49,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function InmateProfile({ inmate, warnings }: InmateProfileProps) {
+/** "Recorded by JS on 2026-11-23", from what is known of who and when. */
+function pronounsRecordedBy(inmate: Inmate): string | undefined {
+  const setAt = parseDate(inmate.pronouns_set_at ?? null);
+  const by = inmate.pronouns_set_by ? ` by ${inmate.pronouns_set_by}` : '';
+  const on = setAt ? ` on ${format(setAt, 'yyyy-MM-dd')}` : '';
+  return by || on ? `Recorded${by}${on}` : undefined;
+}
+
+export function InmateProfile({ inmate, warnings, onEditPronouns }: InmateProfileProps) {
   const releaseDate = parseDate(inmate.release);
   const fetchedDate = parseDate(inmate.datetime_fetched);
   const fullName = [inmate.first_name, inmate.last_name].filter(Boolean).join(' ');
@@ -76,6 +87,24 @@ export function InmateProfile({ inmate, warnings }: InmateProfileProps) {
                 fullName
               )}
             </Field>
+
+            {/* Only when the person stated them in a letter: no row, and no
+                placeholder, otherwise. */}
+            {inmate.pronouns && (
+              <Field label="Pronouns">
+                <span title={pronounsRecordedBy(inmate)}>{inmate.pronouns}</span>
+                {onEditPronouns && (
+                  <button
+                    type="button"
+                    onClick={onEditPronouns}
+                    aria-label="Edit pronouns"
+                    className="text-xs text-muted-foreground underline hover:text-foreground"
+                  >
+                    Edit
+                  </button>
+                )}
+              </Field>
+            )}
 
             <Field label="Unit">
               {!inmate.unit ? (
@@ -124,6 +153,16 @@ export function InmateProfile({ inmate, warnings }: InmateProfileProps) {
               </ul>
             </Field>
           </dl>
+
+          {!inmate.pronouns && onEditPronouns && (
+            <button
+              type="button"
+              onClick={onEditPronouns}
+              className="mt-3 text-xs text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Record pronouns from a letter
+            </button>
+          )}
         </PanelBody>
       </Panel>
     </TooltipProvider>

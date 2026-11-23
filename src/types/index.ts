@@ -3,6 +3,7 @@ export * from './unit';
 export * from './request';
 export * from './comment';
 export * from './inmate';
+export * from './pronouns';
 export * from './metrics';
 export * from './shippingSettings';
 export * from './book';
