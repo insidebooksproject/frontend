@@ -400,6 +400,45 @@ describe('InmateDetailPage', () => {
       await expect.poll(() => fetchCalls('POST', LOOKUPS).length).toBe(2);
     });
 
+    it('records pronouns from the dialog and refreshes the profile without a new lookup', async () => {
+      let inmate: Record<string, unknown> = { ...mockInmate };
+      mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/warnings')) return jsonResponse(mockWarnings);
+        if (method === 'POST' && url.endsWith('/lookups')) return jsonResponse(inmate, 201);
+        if (method === 'PUT' && url.endsWith('/pronouns')) {
+          const { pronouns, set_by } = JSON.parse(String(init?.body));
+          const set_at = '2026-11-23T12:00:00+00:00';
+          inmate = {
+            ...inmate,
+            pronouns,
+            pronouns_set_by: set_by,
+            pronouns_set_at: set_at,
+          };
+          return jsonResponse({ pronouns, set_by, set_at });
+        }
+        if (method === 'GET') return jsonResponse(inmate);
+        return jsonResponse({ detail: `unexpected ${method} ${url}` }, 500);
+      });
+
+      const Wrapper = createTestWrapper();
+      await render(<InmateDetailPage />, { wrapper: Wrapper });
+
+      await page.getByRole('button', { name: 'Record pronouns from a letter' }).click();
+      await page.getByRole('radio', { name: 'they/them' }).click();
+      await page.getByLabelText('Your initials').fill('QZ');
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      await expect
+        .element(page.getByText('they/them', { exact: true }))
+        .toHaveAttribute('title', 'Recorded by QZ on 2026-11-23');
+      await expect
+        .element(page.getByRole('button', { name: 'Record pronouns from a letter' }))
+        .not.toBeInTheDocument();
+      expect(fetchCalls('PUT', /\/inmates\/Texas\/12345\/pronouns$/)).toHaveLength(1);
+      expect(fetchCalls('POST', LOOKUPS)).toHaveLength(1);
+    });
+
     it('shows the lookup error and does not fall back to the read-only GET', async () => {
       mockFetch.mockImplementation(async (url: string, init?: RequestInit) =>
         init?.method === 'POST' && url.endsWith('/lookups')

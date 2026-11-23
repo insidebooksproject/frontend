@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
-import { InmateProfile, InmateProfileSkeleton } from '@/components/inmates';
+import { InmateProfile, InmateProfileSkeleton, PronounsDialog } from '@/components/inmates';
 import { RequestList, RequestForm, RequestListSkeleton } from '@/components/requests';
 import { CommentList, CommentForm, CommentListSkeleton } from '@/components/comments';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ export function InmateDetailPage() {
   const { jurisdiction, id } = useParams<{ jurisdiction: string; id: string }>();
   const [focusRequestIndex, setFocusRequestIndex] = useState<number | null>(null);
   const [commentDialogOpen, setCommentDialogOpen] = useState(false);
+  const [pronounsDialogOpen, setPronounsDialogOpen] = useState(false);
   const { globalSearchRef } = useGlobalSearch();
   const location = useLocation();
 
@@ -110,7 +111,11 @@ export function InmateDetailPage() {
       {pageHeader}
 
       <div className="grid items-stretch gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <InmateProfile inmate={inmate} warnings={warnings} />
+        <InmateProfile
+          inmate={inmate}
+          warnings={warnings}
+          onEditPronouns={() => setPronounsDialogOpen(true)}
+        />
 
         <RequestList
           requests={inmate.requests}
@@ -149,6 +154,14 @@ export function InmateDetailPage() {
           />
         </DialogContent>
       </Dialog>
+
+      <PronounsDialog
+        open={pronounsDialogOpen}
+        onOpenChange={setPronounsDialogOpen}
+        jurisdiction={jurisdiction as Jurisdiction}
+        inmateId={inmateId}
+        pronouns={inmate.pronouns ?? null}
+      />
     </div>
   );
 }
