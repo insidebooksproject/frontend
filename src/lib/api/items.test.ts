@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { addPackageItem, deletePackageItem, getPackageItems, updatePackageItem } from './items';
 import { getPackage } from './packages';
-import { getBook } from './books';
+import { getBook, getBookByUpc } from './books';
 import { ApiError } from './client';
 
 const mockFetch = vi.fn();
@@ -93,5 +93,47 @@ describe('Package, item and book API', () => {
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/books\/978%200140449136$/);
     expect(error.status).toBe(404);
     expect(error.message).toBe('Book not found.');
+  });
+
+  describe('getBookByUpc', () => {
+    const book = {
+      isbn: '9780441172719',
+      title: 'Dune',
+      author: 'Frank Herbert',
+      source: 'claude',
+      confidence: 'high',
+      upc_source: 'volunteer',
+    };
+
+    it('returns the book a UPC maps to', async () => {
+      mockFetch.mockResolvedValue(jsonResponse(book));
+      expect(await getBookByUpc('03600029145200799')).toEqual({ status: 'found', book });
+      expect(mockFetch.mock.calls[0][0]).toMatch(/\/books\/upc\/03600029145200799$/);
+    });
+
+    it('reads a 404 with no ISBN known as an answer', async () => {
+      mockFetch.mockResolvedValue(
+        jsonResponse({ detail: 'No ISBN known for this UPC.', reason: 'no_isbn' }, 404)
+      );
+      expect(await getBookByUpc('036000291452')).toEqual({ status: 'no_isbn' });
+    });
+
+    it('reads a 404 with an ISBN but no title as an answer', async () => {
+      mockFetch.mockResolvedValue(
+        jsonResponse({ detail: 'Book not found.', reason: 'no_book', isbn: book.isbn }, 404)
+      );
+      expect(await getBookByUpc('03600029145200799')).toEqual({
+        status: 'no_book',
+        isbn: book.isbn,
+      });
+    });
+
+    it('throws for an invalid code', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ detail: 'Not a valid UPC.' }, 422));
+      const error = await getBookByUpc('123').catch((e) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.status).toBe(422);
+      expect(error.body).toEqual({ detail: 'Not a valid UPC.' });
+    });
   });
 });
