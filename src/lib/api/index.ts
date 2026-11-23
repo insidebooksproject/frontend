@@ -8,3 +8,4 @@ export * from './shippingSettings';
 export * from './packages';
 export * from './items';
 export * from './books';
+export * from './serverConfig';
