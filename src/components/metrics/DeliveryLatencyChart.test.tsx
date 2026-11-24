@@ -12,6 +12,21 @@ function respondWith(data: unknown[]) {
   mockFetch.mockImplementation(async () => jsonResponse({ data, filters_applied: {} }));
 }
 
+/** Move the mouse over the chart, ``fraction`` of the way across. */
+async function hoverChart(fraction: number) {
+  await expect.poll(() => document.querySelector('.recharts-wrapper')).toBeTruthy();
+  const chart = document.querySelector('.recharts-wrapper')!;
+  const box = chart.getBoundingClientRect();
+  const init = {
+    bubbles: true,
+    clientX: box.left + box.width * fraction,
+    clientY: box.top + box.height / 3,
+  };
+  for (const type of ['mouseenter', 'mouseover', 'mousemove']) {
+    chart.dispatchEvent(new MouseEvent(type, init));
+  }
+}
+
 function requestedUrls(): string[] {
   return mockFetch.mock.calls.map((call) => String(call[0]));
 }
@@ -92,6 +107,61 @@ describe('DeliveryLatencySection', () => {
     await expect
       .element(page.getByText('No month has half its requests delivered yet.'))
       .toBeInTheDocument();
+  });
+
+  it('counts deliveries left out for a bad postmark as delivered', async () => {
+    respondWith([
+      {
+        ...deliveryLatencyMonths[0],
+        filled: 10,
+        linked: 10,
+        delivered: 4,
+        returned: 0,
+        excluded: 2,
+      },
+    ]);
+
+    await render(<DeliveryLatencySection dateRange="12months" />, { wrapper: createWrapper() });
+
+    // Only a complete month is summarized: 6 of 10 is not under half.
+    await expect
+      .element(page.getByTestId('delivery-latency-summary'))
+      .toHaveTextContent('6 of 10 filled requests delivered');
+    await expect
+      .poll(() => document.querySelectorAll('circle[data-complete="true"]').length)
+      .toBe(1);
+    await hoverChart(0.5);
+    await expect
+      .element(page.getByText('Based on 4 deliveries; 2 left out for a bad postmark'))
+      .toBeInTheDocument();
+    await expect.element(page.getByText('4 in the mail')).toBeInTheDocument();
+  });
+
+  it('shows the counts of a month with no delivery times', async () => {
+    respondWith([
+      deliveryLatencyMonths[0],
+      {
+        month: '2026-02',
+        filled: 8,
+        linked: 5,
+        delivered: 0,
+        returned: 1,
+        excluded: 0,
+        earliest: null,
+        latest: null,
+        median_handling: null,
+        median_waiting: null,
+      },
+    ]);
+
+    await render(<DeliveryLatencySection dateRange="12months" />, { wrapper: createWrapper() });
+    await expect.element(page.getByTestId('delivery-latency-summary')).toBeInTheDocument();
+    await hoverChart(0.95);
+
+    await expect.element(page.getByText('Postmarked 2026-02')).toBeInTheDocument();
+    await expect.element(page.getByText('No delivery times yet')).toBeInTheDocument();
+    await expect.element(page.getByText('0 of 8 filled requests delivered')).toBeInTheDocument();
+    await expect.element(page.getByText('4 in the mail, 1 returned')).toBeInTheDocument();
   });
 
   it('shows an error', async () => {

@@ -17,7 +17,7 @@ export const deliveryLatencyMonths: DeliveryLatencyMonth[] = [
   {
     month: '2026-02',
     filled: 10,
-    linked: 6,
+    linked: 8,
     delivered: 2,
     returned: 0,
     excluded: 1,
