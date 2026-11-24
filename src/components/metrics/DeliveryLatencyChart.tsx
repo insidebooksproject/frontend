@@ -52,17 +52,28 @@ function coverageBase(month: DeliveryLatencyMonth, method: DeliveryMethod): numb
   return method === 'all' ? month.filled : month.linked;
 }
 
+/** Every delivered request, including those left out of the latency for a bad
+ * postmark (`delivered` counts only the requests in the statistics). */
+function deliveredCount(month: DeliveryLatencyMonth): number {
+  return month.delivered + month.excluded;
+}
+
 function isComplete(month: DeliveryLatencyMonth, method: DeliveryMethod): boolean {
   const base = coverageBase(month, method);
-  return base > 0 && month.delivered / base >= COMPLETE_COVERAGE;
+  return base > 0 && deliveredCount(month) / base >= COMPLETE_COVERAGE;
+}
+
+function sampleText(month: DeliveryLatencyMonth): string {
+  const based = `Based on ${month.delivered} ${month.delivered === 1 ? 'delivery' : 'deliveries'}`;
+  return month.excluded > 0 ? `${based}; ${month.excluded} left out for a bad postmark` : based;
 }
 
 function coverageText(month: DeliveryLatencyMonth, method: DeliveryMethod): string {
   if (method === 'all') {
-    return `${month.delivered} of ${month.filled} filled requests delivered`;
+    return `${deliveredCount(month)} of ${month.filled} filled requests delivered`;
   }
   const which = method === 'individual' ? 'with their own label' : 'sent in bulk boxes';
-  return `${month.delivered} of ${month.linked} ${which} delivered (${month.filled} filled in all)`;
+  return `${deliveredCount(month)} of ${month.linked} ${which} delivered (${month.filled} filled in all)`;
 }
 
 function toRows(
@@ -90,8 +101,10 @@ interface TooltipProps {
 }
 
 function DeliveryTooltip({ active, payload, method, bound }: TooltipProps) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0].payload;
+  // Rendered with filterNull off, so a month without latencies (only requests
+  // in the mail or returned) still shows its counts.
+  const row = payload?.find((item) => item?.payload)?.payload;
+  if (!active || !row) return null;
   const month = row.source;
   const quartiles = month[bound];
   const inTheMail = month.linked - month.delivered - month.returned - month.excluded;
@@ -105,9 +118,10 @@ function DeliveryTooltip({ active, payload, method, bound }: TooltipProps) {
           {formatDays(quartiles.p75)})
         </p>
       ) : (
-        <p>No deliveries yet</p>
+        <p>No delivery times yet</p>
       )}
       <p className="text-muted-foreground">{coverageText(month, method)}</p>
+      {deliveredCount(month) > 0 && <p className="text-muted-foreground">{sampleText(month)}</p>}
       {!row.complete && <p className="text-muted-foreground">Incomplete: still in the mail</p>}
       {quartiles && (
         <dl className="mt-1 grid grid-cols-[auto_auto] gap-x-3">
@@ -120,12 +134,11 @@ function DeliveryTooltip({ active, payload, method, bound }: TooltipProps) {
           <dd className="text-right">{formatDays(quartiles.median_transit)}</dd>
         </dl>
       )}
-      {(inTheMail > 0 || month.returned > 0 || month.excluded > 0) && (
+      {(inTheMail > 0 || month.returned > 0) && (
         <p className="text-muted-foreground mt-1">
           {[
             inTheMail > 0 && `${inTheMail} in the mail`,
             month.returned > 0 && `${month.returned} returned`,
-            month.excluded > 0 && `${month.excluded} left out (bad postmark)`,
           ]
             .filter(Boolean)
             .join(', ')}
@@ -271,7 +284,10 @@ export function DeliveryLatencySection({ dateRange }: DeliveryLatencySectionProp
                 fontSize: 12,
               }}
             />
-            <Tooltip content={<DeliveryTooltip method={method} bound={bound} />} />
+            <Tooltip
+              filterNull={false}
+              content={<DeliveryTooltip method={method} bound={bound} />}
+            />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Area
               dataKey="band"
