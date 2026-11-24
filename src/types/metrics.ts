@@ -3,10 +3,15 @@ export interface MonthlyMetricPoint {
   filled_count: number;
   tossed_count: number;
   total_count: number;
+  /** The month ended under `settle_days` ago: its letters are still being
+   * answered, so its counts will rise. */
+  provisional?: boolean;
 }
 
 export interface RequestMetricsResponse {
   data: MonthlyMetricPoint[];
+  /** How long a postmark month's counts take to settle, in days. */
+  settle_days: number;
   filters_applied: Record<string, unknown>;
 }
 
