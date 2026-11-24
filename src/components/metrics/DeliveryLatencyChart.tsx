@@ -110,10 +110,15 @@ function DeliveryTooltip({ active, payload, method, bound }: TooltipProps) {
       <p className="text-muted-foreground">{coverageText(month, method)}</p>
       {!row.complete && <p className="text-muted-foreground">Incomplete: still in the mail</p>}
       {quartiles && (
-        <p className="mt-1">
-          Medians: handling {formatDays(month.median_handling)}, waiting to ship{' '}
-          {formatDays(month.median_waiting)}, in transit {formatDays(quartiles.median_transit)}
-        </p>
+        <dl className="mt-1 grid grid-cols-[auto_auto] gap-x-3">
+          <dt className="text-muted-foreground col-span-2">Median of each stage</dt>
+          <dt>Handling</dt>
+          <dd className="text-right">{formatDays(month.median_handling)}</dd>
+          <dt>Waiting to ship</dt>
+          <dd className="text-right">{formatDays(month.median_waiting)}</dd>
+          <dt>In transit</dt>
+          <dd className="text-right">{formatDays(quartiles.median_transit)}</dd>
+        </dl>
       )}
       {(inTheMail > 0 || month.returned > 0 || month.excluded > 0) && (
         <p className="text-muted-foreground mt-1">
@@ -271,6 +276,7 @@ export function DeliveryLatencySection({ dateRange }: DeliveryLatencySectionProp
             <Area
               dataKey="band"
               name="Middle half (25th to 75th percentile)"
+              legendType="square"
               stroke="none"
               fill={COLOR}
               fillOpacity={0.2}
