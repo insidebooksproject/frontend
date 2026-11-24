@@ -31,6 +31,21 @@ function requestedUrls(): string[] {
   return mockFetch.mock.calls.map((call) => String(call[0]));
 }
 
+/** A month with 6 of 10 filled requests delivered, every one left out of the
+ * latency for a bad postmark, and 4 in the mail. */
+const noTimes = {
+  month: '2026-03',
+  filled: 10,
+  linked: 10,
+  delivered: 0,
+  returned: 0,
+  excluded: 6,
+  earliest: null,
+  latest: null,
+  median_handling: null,
+  median_waiting: null,
+};
+
 describe('DeliveryLatencySection', () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -45,7 +60,7 @@ describe('DeliveryLatencySection', () => {
     await expect
       .element(page.getByTestId('delivery-latency-summary'))
       .toHaveTextContent(
-        'Latest complete month, 2026-01: median 15 d (middle half 12 d to 19.5 d); 7 of 10 filled requests delivered.'
+        'Latest month at least half delivered, 2026-01: median 15 d (middle half 12 d to 19.5 d); 7 of 10 filled requests delivered.'
       );
     await expect.element(page.getByText('Median, latest box')).toBeInTheDocument();
     await expect
@@ -56,6 +71,9 @@ describe('DeliveryLatencySection', () => {
       .poll(() => document.querySelectorAll('circle[data-complete="false"]').length)
       .toBe(1);
     expect(document.querySelectorAll('circle[data-complete="true"]').length).toBe(1);
+    expect(
+      document.querySelector('circle[aria-label="2026-02: under half delivered so far"]')
+    ).not.toBeNull();
     expect(requestedUrls()[0]).toContain('method=all');
     expect(requestedUrls()[0]).toContain('date_range=12months');
   });
@@ -162,6 +180,47 @@ describe('DeliveryLatencySection', () => {
     await expect.element(page.getByText('No delivery times yet')).toBeInTheDocument();
     await expect.element(page.getByText('0 of 8 filled requests delivered')).toBeInTheDocument();
     await expect.element(page.getByText('4 in the mail, 1 returned')).toBeInTheDocument();
+  });
+
+  it('summarizes a month half delivered even with no usable delivery times', async () => {
+    respondWith([{ ...noTimes, month: '2026-03' }]);
+
+    await render(<DeliveryLatencySection dateRange="12months" />, { wrapper: createWrapper() });
+
+    await expect
+      .element(page.getByTestId('delivery-latency-summary'))
+      .toHaveTextContent(
+        'Latest month at least half delivered, 2026-03: 6 of 10 filled requests delivered; no usable delivery times.'
+      );
+  });
+
+  it('summarizes the latest month half delivered, not an older one with times', async () => {
+    respondWith([deliveryLatencyMonths[0], { ...noTimes, month: '2026-02' }]);
+
+    await render(<DeliveryLatencySection dateRange="12months" />, { wrapper: createWrapper() });
+
+    await expect
+      .element(page.getByTestId('delivery-latency-summary'))
+      .toHaveTextContent('Latest month at least half delivered, 2026-02:');
+    await expect
+      .element(page.getByTestId('delivery-latency-summary'))
+      .not.toHaveTextContent('2026-01');
+  });
+
+  it('marks a month under half delivered without calling returns in the mail', async () => {
+    respondWith([
+      deliveryLatencyMonths[0],
+      { ...noTimes, month: '2026-02', linked: 10, excluded: 0, returned: 10 },
+    ]);
+
+    await render(<DeliveryLatencySection dateRange="12months" />, { wrapper: createWrapper() });
+    await expect.element(page.getByTestId('delivery-latency-summary')).toBeInTheDocument();
+    await hoverChart(0.95);
+
+    await expect.element(page.getByText('Postmarked 2026-02')).toBeInTheDocument();
+    await expect.element(page.getByText('Under half delivered so far')).toBeInTheDocument();
+    await expect.element(page.getByText('10 returned')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('in the mail');
   });
 
   it('shows an error', async () => {
