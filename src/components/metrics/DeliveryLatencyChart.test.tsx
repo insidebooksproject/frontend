@@ -120,6 +120,18 @@ describe('DeliveryLatencySection', () => {
     await expect.element(page.getByText(/No shipment data yet/)).toBeInTheDocument();
   });
 
+  it('says there is no shipment data yet when an open range lists no months', async () => {
+    // With no start and nothing linked, the backend returns no months at all.
+    respondWith([]);
+
+    await render(<DeliveryLatencySection dateRange="all" />, { wrapper: createWrapper() });
+
+    await expect
+      .element(page.getByText('No shipment data yet for the selected filters.'))
+      .toBeInTheDocument();
+    expect(document.querySelector('.recharts-wrapper')).toBeNull();
+  });
+
   it('says when no month is complete', async () => {
     respondWith([deliveryLatencyMonths[1]]);
 
