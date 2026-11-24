@@ -52,10 +52,15 @@ export interface DeliveryLatencyMonth {
   latest: LatencyQuartiles | null;
   median_handling: number | null;
   median_waiting: number | null;
+  /** The month ended under `settle_days` ago: its letters are still being
+   * answered, so its figures will rise. */
+  provisional: boolean;
 }
 
 export interface DeliveryLatencyResponse {
   data: DeliveryLatencyMonth[];
+  /** How long a postmark month takes to settle, in days. */
+  settle_days: number;
   filters_applied: Record<string, unknown>;
 }
 
