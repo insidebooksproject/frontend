@@ -122,7 +122,7 @@ function DeliveryTooltip({ active, payload, method, bound }: TooltipProps) {
       )}
       <p className="text-muted-foreground">{coverageText(month, method)}</p>
       {deliveredCount(month) > 0 && <p className="text-muted-foreground">{sampleText(month)}</p>}
-      {!row.complete && <p className="text-muted-foreground">Incomplete: still in the mail</p>}
+      {!row.complete && <p className="text-muted-foreground">Under half delivered so far</p>}
       {quartiles && (
         <dl className="mt-1 grid grid-cols-[auto_auto] gap-x-3">
           <dt className="text-muted-foreground col-span-2">Median of each stage</dt>
@@ -169,6 +169,9 @@ function MonthDot({ cx, cy, index, payload }: DotProps) {
       stroke={COLOR}
       strokeWidth={2}
       fill={payload.complete ? COLOR : 'var(--card)'}
+      aria-label={
+        payload.complete ? payload.month : `${payload.month}: under half delivered so far`
+      }
       data-complete={payload.complete}
     />
   );
@@ -183,18 +186,26 @@ function Summary({
   method: DeliveryMethod;
   bound: DeliveryBound;
 }) {
-  const last = [...rows].reverse().find((row) => row.complete && row.source[bound]);
+  // The latest month at least half delivered, whether or not any of its
+  // deliveries has a usable time (all may be left out for a bad postmark).
+  const last = [...rows].reverse().find((row) => row.complete);
   if (!last) {
     return (
       <p className="text-muted-foreground text-sm">No month has half its requests delivered yet.</p>
     );
   }
-  const quartiles = last.source[bound]!;
+  const quartiles = last.source[bound];
   return (
     <p className="text-sm" data-testid="delivery-latency-summary">
-      Latest complete month, {last.month}: median {formatDays(quartiles.median)} (middle half{' '}
-      {formatDays(quartiles.p25)} to {formatDays(quartiles.p75)});{' '}
-      {coverageText(last.source, method)}.
+      Latest month at least half delivered, {last.month}:{' '}
+      {quartiles ? (
+        <>
+          median {formatDays(quartiles.median)} (middle half {formatDays(quartiles.p25)} to{' '}
+          {formatDays(quartiles.p75)}); {coverageText(last.source, method)}.
+        </>
+      ) : (
+        <>{coverageText(last.source, method)}; no usable delivery times.</>
+      )}
     </p>
   );
 }
@@ -310,10 +321,10 @@ export function DeliveryLatencySection({ dateRange }: DeliveryLatencySectionProp
           </ComposedChart>
         </ResponsiveContainer>
         <p className="text-muted-foreground text-xs">
-          Hollow points: under half the month&apos;s requests delivered so far (still in the mail).
-          Bulk packages are matched to the first box sent to the unit after they were filled, so a
-          single package&apos;s date can be off by one shipping session. &ldquo;Delivered&rdquo;
-          means delivered to the unit&apos;s mailroom.
+          Hollow points: under half the month&apos;s requests delivered so far. Bulk packages are
+          matched to the first box sent to the unit after they were filled, so a single
+          package&apos;s date can be off by one shipping session. &ldquo;Delivered&rdquo; means
+          delivered to the unit&apos;s mailroom.
         </p>
       </div>
     );
