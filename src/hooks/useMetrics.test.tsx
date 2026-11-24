@@ -22,7 +22,11 @@ describe('useDeliveryLatency', () => {
 
   it('fetches the months for the method and date range', async () => {
     mockFetch.mockResolvedValue(
-      jsonResponse({ data: deliveryLatencyMonths, filters_applied: { method: 'bulk' } })
+      jsonResponse({
+        data: deliveryLatencyMonths,
+        settle_days: 90,
+        filters_applied: { method: 'bulk' },
+      })
     );
 
     const Wrapper = createWrapper();

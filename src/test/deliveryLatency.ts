@@ -13,6 +13,7 @@ export const deliveryLatencyMonths: DeliveryLatencyMonth[] = [
     latest: { p25: 12, median: 15, p75: 19.5, median_transit: 5 },
     median_handling: 6,
     median_waiting: 3,
+    provisional: false,
   },
   {
     month: '2026-02',
@@ -25,6 +26,7 @@ export const deliveryLatencyMonths: DeliveryLatencyMonth[] = [
     latest: { p25: 9, median: 10, p75: 11, median_transit: 3 },
     median_handling: 5,
     median_waiting: 2,
+    provisional: false,
   },
 ];
 
