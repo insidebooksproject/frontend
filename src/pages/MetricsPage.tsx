@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MetricsChart, MetricsFilters } from '@/components/metrics';
+import { DeliveryLatencySection, MetricsChart, MetricsFilters } from '@/components/metrics';
 import { useRequestMetrics } from '@/hooks';
 import type { MetricsFilters as MetricsFiltersType } from '@/types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -31,6 +31,8 @@ export function MetricsPage() {
       )}
 
       <MetricsChart data={data?.data || []} isLoading={isLoading} />
+
+      <DeliveryLatencySection dateRange={filters.dateRange} />
     </div>
   );
 }

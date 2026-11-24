@@ -1,4 +1,9 @@
-import type { RequestMetricsResponse, MetricsFilters } from '@/types';
+import type {
+  DeliveryLatencyFilters,
+  DeliveryLatencyResponse,
+  RequestMetricsResponse,
+  MetricsFilters,
+} from '@/types';
 import { apiGet } from './client';
 
 export async function getRequestMetrics(
@@ -20,4 +25,11 @@ export async function getRequestMetrics(
   const path = `/metrics/requests${queryString ? `?${queryString}` : ''}`;
 
   return apiGet<RequestMetricsResponse>(path);
+}
+
+export async function getDeliveryLatency(
+  filters: DeliveryLatencyFilters
+): Promise<DeliveryLatencyResponse> {
+  const params = new URLSearchParams({ method: filters.method, date_range: filters.dateRange });
+  return apiGet<DeliveryLatencyResponse>(`/metrics/delivery-latency?${params.toString()}`);
 }
