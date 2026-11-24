@@ -30,7 +30,7 @@ export function MetricsPage() {
         </Alert>
       )}
 
-      <MetricsChart data={data?.data || []} isLoading={isLoading} />
+      <MetricsChart data={data?.data || []} settleDays={data?.settle_days} isLoading={isLoading} />
 
       <DeliveryLatencySection dateRange={filters.dateRange} />
     </div>
