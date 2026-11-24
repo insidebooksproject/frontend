@@ -28,3 +28,7 @@ dist-ssr
 
 # Agent worktrees
 .claude/
+
+# Failure screenshots from vitest browser runs
+.vitest-attachments/
+__screenshots__/
