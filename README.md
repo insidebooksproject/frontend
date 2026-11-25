@@ -5,13 +5,14 @@ The web UI for the Inside Books Project
 book requests, print package labels, add comments, manage prison units and
 shipping settings, and view metrics. It is a React + TypeScript single-page
 app built with Vite; all data comes from the FastAPI backend
-([ibp-backend](https://github.com/insidebooksproject/backend)) under `/api/`.
+([insidebooksproject/backend](https://github.com/insidebooksproject/backend))
+under `/api/`.
 
 The header search takes a name, an inmate ID, or the request number printed on
 an old package label, but only numbers 264807-270049 (labels from roughly the
 six months before the 2026-11-02 cutover). Older request numbers look like
 6-digit TDCJ inmate IDs, so they are searched as inmate IDs only. The range is
-set in `src/lib/legacyRequest.ts` and matches ibp-book-portal-extension's. A
+set in `src/lib/legacyRequest.ts` and matches `scan.js` in book-portal-extension. A
 number in the range is also searched as an inmate ID, and if that finds a
 different inmate, both are listed instead of redirecting.
 
@@ -24,9 +25,9 @@ npm ci
 npm run dev
 ```
 
-The dev server (http://localhost:5173) proxies `/api` to an ibp-backend on
+The dev server (http://localhost:5173) proxies `/api` to a backend on
 `http://localhost:8000` (see `server.proxy` in `vite.config.ts`), so start the
-backend first (`uv run fastapi dev ibp` in ibp-backend).
+backend first (`uv run fastapi dev ibp` in a backend checkout).
 
 Optional build-time environment variables (copy `.env.example` to `.env.local`):
 
@@ -68,7 +69,7 @@ to GHCR:
 - `ghcr.io/insidebooksproject/frontend:vX.Y.Z` for each `v*` tag
 
 Production (`ibp-server`, a Raspberry Pi 4) runs a pinned release tag in the
-Docker Compose stack in ibp-backend's
+Docker Compose stack in the backend repo's
 [`deploy/pi/`](https://github.com/insidebooksproject/backend/tree/main/deploy/pi):
 set `IBP_TAG` in `/srv/ibp/.env`, then `docker compose pull && docker compose
 up -d`. See that directory's README for details.
