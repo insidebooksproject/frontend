@@ -81,6 +81,8 @@ needs the same `vX.Y.Z` tag in both repos. See that directory's README for
 details.
 
 nginx serves the app with an SPA fallback and proxies `/api/` to the backend
-container. The image's default config is `nginx.conf` in this repo; the Pi
-stack mounts its own HTTP-only copy (`deploy/pi/nginx.conf` in ibp-backend)
-over it, so keep the two in step.
+container. Production doesn't use this repo's `nginx.conf`: the Pi stack
+mounts its own HTTP-only config (`deploy/pi/nginx.conf` in the backend repo)
+over it. The image's default config proxies to a host named `backend` and
+also has an HTTPS server that needs a certificate in `/etc/nginx/ssl/`, so
+mount a config of your own wherever else you run the image.
