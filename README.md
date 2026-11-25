@@ -69,11 +69,16 @@ to GHCR:
 - `ghcr.io/insidebooksproject/frontend:main` and `:sha-<sha>` for each push to `main`
 - `ghcr.io/insidebooksproject/frontend:vX.Y.Z` for each `v*` tag
 
+Releases up to v1.0.19 were published as `ghcr.io/jonkensta/ibp-frontend`,
+before the repo moved to the organisation.
+
 Production (`ibp-server`, a Raspberry Pi 4) runs a pinned release tag in the
 Docker Compose stack in the backend repo's
 [`deploy/pi/`](https://github.com/insidebooksproject/backend/tree/main/deploy/pi):
 set `IBP_TAG` in `/srv/ibp/.env`, then `docker compose pull && docker compose
-up -d`. See that directory's README for details.
+up -d`. `IBP_TAG` pins the backend and frontend images alike, so a release
+needs the same `vX.Y.Z` tag in both repos. See that directory's README for
+details.
 
 nginx serves the app with an SPA fallback and proxies `/api/` to the backend
 container. The image's default config is `nginx.conf` in this repo; the Pi
