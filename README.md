@@ -5,7 +5,7 @@ The web UI for the Inside Books Project
 book requests, print package labels, add comments, manage prison units and
 shipping settings, and view metrics. It is a React + TypeScript single-page
 app built with Vite; all data comes from the FastAPI backend
-([ibp-backend](https://github.com/jonkensta/ibp-backend)) under `/api/`.
+([ibp-backend](https://github.com/insidebooksproject/backend)) under `/api/`.
 
 The header search takes a name, an inmate ID, or the request number printed on
 an old package label, but only numbers 264807-270049 (labels from roughly the
@@ -33,7 +33,7 @@ Optional build-time environment variables (copy `.env.example` to `.env.local`):
 | Variable | Default | Purpose |
 |---|---|---|
 | `VITE_API_BASE_URL` | `/api` | Backend base URL; leave unset to go through the proxy (set it only for a backend at another origin with `[server] cors_origins`) |
-| `VITE_PRINT_SERVER_URL` | `http://localhost:40121` | Intake station's [ibp-print-server](https://github.com/jonkensta/ibp-printing/blob/main/docs/print-server.md) (part of ibp-printing) |
+| `VITE_PRINT_SERVER_URL` | `http://localhost:40121` | Intake station's [ibp-print-server](https://github.com/insidebooksproject/printing/blob/main/docs/print-server.md) (part of ibp-printing) |
 
 ## Checks
 
@@ -64,12 +64,12 @@ npm run preview # serve dist/ locally
 build stage, then nginx serving `dist/`) for amd64 and arm64 and publishes it
 to GHCR:
 
-- `ghcr.io/jonkensta/ibp-frontend:main` and `:sha-<sha>` for each push to `main`
-- `ghcr.io/jonkensta/ibp-frontend:vX.Y.Z` for each `v*` tag
+- `ghcr.io/insidebooksproject/frontend:main` and `:sha-<sha>` for each push to `main`
+- `ghcr.io/insidebooksproject/frontend:vX.Y.Z` for each `v*` tag
 
 Production (`ibp-server`, a Raspberry Pi 4) runs a pinned release tag in the
 Docker Compose stack in ibp-backend's
-[`deploy/pi/`](https://github.com/jonkensta/ibp-backend/tree/main/deploy/pi):
+[`deploy/pi/`](https://github.com/insidebooksproject/backend/tree/main/deploy/pi):
 set `IBP_TAG` in `/srv/ibp/.env`, then `docker compose pull && docker compose
 up -d`. See that directory's README for details.
 
