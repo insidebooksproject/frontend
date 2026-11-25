@@ -18,7 +18,8 @@ different inmate, both are listed instead of redirecting.
 
 ## Development
 
-Requires Node.js 20.19 or newer (CI and the Docker build use Node 24).
+Requires Node.js 20.19+ or 22.12+, as Vite 7 does (CI and the Docker build use
+Node 24).
 
 ```sh
 npm ci
