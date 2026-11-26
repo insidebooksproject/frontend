@@ -1,7 +1,7 @@
 // Legacy request IDs: the old app's request autoid, kept as Request.request_id
 // by ibp-backend's migrate.py and printed (bare) on package labels before the
 // 2026-11-02 cutover. Requests made since get none, so the range is closed.
-// Mirrors ibp-book-portal-extension/scan.js.
+// Mirrors book-portal-extension/scan.js.
 export const LEGACY_MAX_REQUEST_ID = 270049;
 
 // Lowest legacy ID on a package processed in the six months before the
