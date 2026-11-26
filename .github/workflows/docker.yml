@@ -1,11 +1,9 @@
 name: Docker image
 
-# Builds the frontend image for amd64 (beelink demo, desktops) and arm64 (the
-# Raspberry Pi 4 production server) and publishes it to GHCR:
-#   ghcr.io/insidebooksproject/frontend:main      latest commit on main
-#   ghcr.io/insidebooksproject/frontend:sha-<sha> every pushed commit on main
-#   ghcr.io/insidebooksproject/frontend:vX.Y.Z    release tags (production pins one)
-# Pull requests build both platforms but push nothing.
+# Builds the frontend image for amd64 and arm64 (the Raspberry Pi 4
+# production server) and publishes it to ghcr.io/insidebooksproject/frontend,
+# tagged main, sha-<sha> and vX.Y.Z (see README, Deployment). Pull requests
+# build both platforms but push nothing.
 
 on:
   push:

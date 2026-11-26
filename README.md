@@ -1,32 +1,34 @@
 # ibp-frontend
 
-The web UI for the Inside Books Project
-(IBP) database. Volunteers use it to look up inmates (TDCJ and federal), log
-book requests, print package labels, add comments, manage prison units and
-shipping settings, and view metrics. It is a React + TypeScript single-page
-app built with Vite; all data comes from the FastAPI backend
-([ibp-backend](https://github.com/insidebooksproject/backend)) under `/api/`.
+The web UI for the Inside Books Project (IBP) database. Volunteers use it to
+look up inmates (TDCJ and federal), log book requests, print package labels,
+add comments, manage prison units and shipping settings, and view metrics. It
+is a React + TypeScript single-page app built with Vite; all data comes from
+the FastAPI backend
+([insidebooksproject/backend](https://github.com/insidebooksproject/backend))
+under `/api/`.
 
 The header search takes a name, an inmate ID, or the request number printed on
 an old package label, but only numbers 264807-270049 (labels from roughly the
 six months before the 2026-11-02 cutover). Older request numbers look like
-6-digit TDCJ inmate IDs, so they are searched as inmate IDs only. The range is
-set in `src/lib/legacyRequest.ts` and matches ibp-book-portal-extension's. A
-number in the range is also searched as an inmate ID, and if that finds a
-different inmate, both are listed instead of redirecting.
+6-digit TDCJ inmate IDs, so they are searched as inmate IDs only. A number in
+the range is also searched as an inmate ID, and if that finds a different
+inmate, both are listed instead of redirecting. The range is set in
+`src/lib/legacyRequest.ts` and matches `scan.js` in book-portal-extension.
 
 ## Development
 
-Requires Node.js 20.19 or newer (CI and the Docker build use Node 24).
+Requires Node.js 20.19+ or 22.12+, as Vite 7 does (CI and the Docker build use
+Node 24).
 
 ```sh
 npm ci
 npm run dev
 ```
 
-The dev server (http://localhost:5173) proxies `/api` to an ibp-backend on
+The dev server (http://localhost:5173) proxies `/api` to a backend on
 `http://localhost:8000` (see `server.proxy` in `vite.config.ts`), so start the
-backend first (`uv run fastapi dev ibp` in ibp-backend).
+backend first (`uv run fastapi dev ibp` in a backend checkout).
 
 Optional build-time environment variables (copy `.env.example` to `.env.local`):
 
@@ -67,13 +69,20 @@ to GHCR:
 - `ghcr.io/insidebooksproject/frontend:main` and `:sha-<sha>` for each push to `main`
 - `ghcr.io/insidebooksproject/frontend:vX.Y.Z` for each `v*` tag
 
+Releases up to v1.0.19 were published as `ghcr.io/jonkensta/ibp-frontend`,
+before the repo moved to the organisation.
+
 Production (`ibp-server`, a Raspberry Pi 4) runs a pinned release tag in the
-Docker Compose stack in ibp-backend's
+Docker Compose stack in the backend repo's
 [`deploy/pi/`](https://github.com/insidebooksproject/backend/tree/main/deploy/pi):
 set `IBP_TAG` in `/srv/ibp/.env`, then `docker compose pull && docker compose
-up -d`. See that directory's README for details.
+up -d`. `IBP_TAG` pins the backend and frontend images alike, so a release
+needs the same `vX.Y.Z` tag in both repos. See that directory's README for
+details.
 
 nginx serves the app with an SPA fallback and proxies `/api/` to the backend
-container. The image's default config is `nginx.conf` in this repo; the Pi
-stack mounts its own HTTP-only copy (`deploy/pi/nginx.conf` in ibp-backend)
-over it, so keep the two in step.
+container. Production doesn't use this repo's `nginx.conf`: the Pi stack
+mounts its own HTTP-only config (`deploy/pi/nginx.conf` in the backend repo)
+over it. The image's default config proxies to a host named `backend` and
+also has an HTTPS server that needs a certificate in `/etc/nginx/ssl/`, so
+mount a config of your own wherever else you run the image.
