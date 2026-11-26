@@ -80,9 +80,11 @@ up -d`. `IBP_TAG` pins the backend and frontend images alike, so a release
 needs the same `vX.Y.Z` tag in both repos. See that directory's README for
 details.
 
-nginx serves the app with an SPA fallback and proxies `/api/` to the backend
-container. Production doesn't use this repo's `nginx.conf`: the Pi stack
-mounts its own HTTP-only config (`deploy/pi/nginx.conf` in the backend repo)
-over it. The image's default config proxies to a host named `backend` and
-also has an HTTPS server that needs a certificate in `/etc/nginx/ssl/`, so
-mount a config of your own wherever else you run the image.
+nginx serves the app with an SPA fallback and proxies `/api/` to the backend.
+The image's `nginx.conf` is HTTP only on port 80 and needs no certificates; it
+proxies to `ibp-backend:8000`, the backend's service name in the Pi stack,
+resolved through Docker's DNS at request time, so run the backend under that
+name on the same user-defined network. nginx starts without the backend and
+answers `/api/` with 502 until it is up. The Pi stack mounts its own copy
+(`deploy/pi/nginx.conf` in the backend repo) over `/etc/nginx/nginx.conf`;
+keep the two files alike apart from their header comments.
