@@ -13,6 +13,11 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# The release the image is built from (vX.Y.Z, or sha-<commit> for a build
+# of main), which the app puts in its error reports (src/lib/errorReporting.ts).
+ARG IBP_VERSION=dev
+ENV VITE_APP_VERSION=$IBP_VERSION
+
 # Build the app
 RUN npm run build
 

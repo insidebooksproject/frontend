@@ -16,6 +16,28 @@ the range is also searched as an inmate ID, and if that finds a different
 inmate, both are listed instead of redirecting. The range is set in
 `src/lib/legacyRequest.ts` and matches `scan.js` in book-portal-extension.
 
+## Error reports
+
+The app reports unexpected errors to the backend's `POST /api/client-errors`
+(`src/lib/errorReporting.ts`), which appends them to `client-errors.jsonl` on
+ibp-server for the weekly error digest (design: `docs/error-reporting.md` in
+the IBP meta repo). Reported: uncaught errors (`window` `error` events),
+unhandled promise rejections, errors an `ErrorBoundary` catches, and React
+Query errors (the global `QueryCache` and `MutationCache` handlers in
+`src/lib/queryClient.ts`) that are a 5xx answer or a response that failed to
+parse. Network failures (the server can't be reached to take them) and 4xx
+answers, which the pages handle, are not. Each report is one event (`level`,
+`app` `frontend`, `version`, `logger`, `msg`, `exc` with the stack, and
+`data.url`, the page path without its query string); the backend adds `ts`
+and `host`. The same message goes at most once a minute per tab, with
+`fetch(..., {keepalive: true})` so a report sent as the page closes still
+arrives. A report that fails is dropped, never reported. Nothing changes on
+the page.
+
+`version` is `VITE_APP_VERSION`, set by the Docker build from its
+`IBP_VERSION` build argument (`vX.Y.Z` for a release, `sha-<commit>` for a
+build of `main`), and `dev` otherwise.
+
 ## Development
 
 Requires Node.js 20.19+ or 22.12+, as Vite 7 does (CI and the Docker build use
